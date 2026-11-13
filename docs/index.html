@@ -4,38 +4,66 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<meta name="theme-color" content="#0e1117">
+<meta name="theme-color" content="#07071a">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://telegram.org; connect-src 'self' https://api.github.com https://raw.githubusercontent.com; img-src 'self' data:; style-src 'self'; frame-ancestors *">
 <title>SHADOW MEME - Paper Dashboard</title>
-<link rel="stylesheet" href="style.css?v=9.1">
+<link rel="icon" href="logo.svg">
+<link rel="stylesheet" href="style.css?v=11.1">
 <script async src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
 <header id="top">
-  <div class="brand"><span class="logo">🕶️</span><div><div class="name">SHADOW MEME</div><div class="sub" id="updated">loading…</div></div></div>
-  <div class="pills"><span class="pill paper">PAPER ONLY</span><span class="pill" id="state">…</span></div>
+  <div class="brand"><img class="logo" src="logo.svg" alt="" width="38" height="38">
+    <div class="bt"><div class="name">SHADOW MEME <span class="tick" title="Your own bot">✓</span></div><div class="sub" id="updated">loading…</div></div></div>
+  <div class="pills"><span class="pill" id="state">…</span><span class="pill paper">PAPER ONLY</span></div>
 </header>
-<nav id="nav">
-  <a href="#account">Account</a><a href="#positions">Positions</a><a href="#history">History</a><a href="#signals">Signals</a>
-  <a href="#judge">Judge</a><a href="#strategies">Strategies</a><a href="#scanner">Scanner</a>
-</nav>
 <main>
   <div id="notices"></div>
-  <section id="account"><h2>Paper account <small>virtual $ - asli paisa nahi</small></h2><div class="body"></div></section>
-  <section id="positions"><h2>Open positions <small>khuli paper positions</small></h2><div class="body"></div></section>
-  <section id="history"><h2>Trade history <small>band hui trades</small></h2><div class="body"></div></section>
-  <section id="signals"><h2>Signals per universe</h2><div class="body"></div></section>
-  <section id="judge"><h2>Judge <small>APPROVE / VETO</small></h2><div class="body"></div></section>
-  <section id="strategies"><h2>Strategies &amp; updates <small>self-learning</small></h2><div class="body"></div></section>
-  <section id="scanner"><h2>Scanner health</h2><div class="body"></div></section>
+  <section id="stats" class="statrow" aria-label="Totals"></section>
+  <section id="unis" class="unirow" aria-label="Universes"></section>
+  <div class="ovgrid">
+    <section id="overview" class="card glow"><div class="body"></div></section>
+    <section id="side" class="side"></section>
+  </div>
+  <div class="tabs" id="tabs" role="tablist">
+    <button type="button" role="tab" data-tab="rug" class="on">Rug Scanner</button>
+    <button type="button" role="tab" data-tab="trades">Trade Log</button>
+    <button type="button" role="tab" data-tab="judge">Strategies/Judge</button>
+    <button type="button" role="tab" data-tab="settings">Settings</button>
+  </div>
+  <div class="panel on" id="tab-rug">
+    <section id="rugfilter" class="card"><h2>Rug Filter <small>safety checker</small></h2><div class="body"></div></section>
+    <section id="killlog" class="card"><h2><span class="dot"></span>Kill Log (Live) <small>BUY · SELL · KILL</small></h2><div class="body"></div></section>
+    <section id="signals" class="card"><h2>Signals per universe</h2><div class="body"></div></section>
+  </div>
+  <div class="panel" id="tab-trades">
+    <section id="account" class="card"><h2>Paper account <small>virtual $ - asli paisa nahi</small></h2><div class="body"></div></section>
+    <section id="positions" class="card"><h2>Open positions <small>khuli paper positions</small></h2><div class="body"></div></section>
+    <section id="history" class="card"><h2>Trade history <small>band hui trades</small></h2><div class="body"></div></section>
+  </div>
+  <div class="panel" id="tab-judge">
+    <section id="judge" class="card"><h2>Judge <small>APPROVE / VETO</small></h2><div class="body"></div></section>
+    <section id="strategies" class="card"><h2>Strategies &amp; updates <small>self-learning</small></h2><div class="body"></div></section>
+  </div>
+  <div class="panel" id="tab-settings">
+    <section id="scanner" class="card"><h2>Scanner health</h2><div class="body"></div></section>
+    <section id="settings" class="card"><h2>Settings <small>this page only</small></h2><div class="body"></div></section>
+  </div>
   <footer>
-    <p><b>PAPER TRADING ONLY.</b> No wallet, no private keys, no real money. Signals are not financial advice.
+    <p><b>PAPER TRADING ONLY.</b> No wallet, no private keys, no real money. Solana only. Signals are not financial advice.
     Sirf paper (virtual) trading - asli paisa nahi.</p>
     <p id="source" class="muted"></p>
     <button id="refresh" type="button">↻ Refresh</button>
   </footer>
 </main>
+<nav id="bottom" aria-label="Main">
+  <button type="button" data-go="top" class="on"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>Dashboard</button>
+  <button type="button" data-go="rug"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>Scanner</button>
+  <button type="button" data-go="trades"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16M7 4L3 8M7 4l4 4M17 20V4M17 20l-4-4M17 20l4-4"/></svg>Trade</button>
+  <button type="button" data-go="judge"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Analytics</button>
+  <button type="button" data-go="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>More</button>
+</nav>
 <noscript>This dashboard needs JavaScript.</noscript>
-<script src="app.js?v=9.1"></script>
+<script src="app.js?v=11.1"></script>
 </body>
 </html>

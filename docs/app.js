@@ -7,7 +7,7 @@
   var Q = new URLSearchParams(location.search);
   var tg = null;
   var UNIS = [["new", "NEW"], ["mcap", "MCAP"], ["volume", "TOP VOLUME"]];
-  var state = { snap: null, sum: null, notes: [], source: "", uniFilter: "all" };
+  var state = { snap: null, sum: null, notes: [], source: "", uniFilter: "all", evFilter: "all" };
 
   // ---------------------------------------------------------------- helpers
   function h(tag, props) {
@@ -142,16 +142,139 @@
     var stale = ts && Date.now() / 1000 - ts > 20 * 60;
     var pill = document.getElementById("state");
     pill.className = "pill " + (stale ? "offline" : st);
-    pill.textContent = stale ? "⚠ NO UPDATE " + ago(ts).replace(" ago", "") : st === "running" ? "▶ RUNNING" : st === "paused" ? "⏸ PAUSED" : (s || m ? "SNAPSHOT" : "NO DATA");
+    pill.textContent = stale ? "⚠ NO UPDATE " + ago(ts).replace(" ago", "") : st === "running" ? "● LIVE" : st === "paused" ? "⏸ PAUSED" : (s || m ? "SNAPSHOT" : "NO DATA");
+    pill.title = stale ? "no fresh upload" : st === "running" ? "bot RUNNING" : st;
     document.getElementById("updated").textContent = ts ? "updated " + fmtTime(ts, true) + " " + tzLabel() + " · " + ago(ts) : "no data";
     var nb = document.getElementById("notices"); nb.textContent = "";
     state.notes.forEach(function (x) { nb.appendChild(h("div", { class: "notice " + x[0], text: x[1] })); });
     if (stale && st !== "offline") nb.appendChild(h("div", { class: "notice warn", text: "Last update " + ago(ts) + ": the bot may be stopped, offline, or (with GITHUB_TOKEN) unable to upload. Open the dashboard from the bot again for fresh numbers." }));
     if (st === "paused") nb.appendChild(h("div", { class: "notice warn", text: "Bot is PAUSED: no new paper trades or signal alerts. Scanning and open-position exits continue. /resume in Telegram." }));
-    renderAccount(s, useSum ? m : null);
-    renderPositions(s); renderHistory(s); renderSignals(s, m); renderJudge(s, m); renderStrategies(s); renderScanner(s);
+    var mm = useSum ? m : null;
+    renderStats(s, mm || (s ? null : m)); renderUnis(s); renderOverview(s, mm || (s ? null : m)); renderSide(s, mm || (s ? null : m));
+    renderRugFilter(s); renderKillLog(s);
+    renderAccount(s, mm);
+    renderPositions(s); renderHistory(s); renderSignals(s, m); renderJudge(s, m); renderStrategies(s); renderScanner(s); renderSettings();
     document.getElementById("source").textContent = "Data: " + (s ? state.source : "—") + (m ? " · link summary " + fmtTime(m.t, true) + " " + tzLabel() : "") +
       (s ? " · v" + s.version : (m && m.ver ? " · v" + m.ver : ""));
+  }
+
+  function ins(s) { return s && s.insights ? s.insights : null; }
+  function int(x) { return num(x) ? String(Math.round(x)).replace(/\B(?=(\d{3})+(?!\d))/g, ",") : "—"; }
+  function sinceTxt(s) { var i = ins(s); return i && num(i.totals.since) ? "since " + fmtTime(i.totals.since, true) : ""; }
+  function stat(k, v, m, c) { return h("div", { class: "st" }, h("div", { class: "k", text: k }), h("div", { class: "v " + (c || ""), text: v }), h("div", { class: "m", text: m || "\u00a0" })); }
+
+  function renderStats(s, m) {
+    var b = document.getElementById("stats"); b.textContent = "";
+    var i = ins(s), T = i ? i.totals : null, k = m && m.k ? m.k : null;
+    var closed = T ? T.closed : (m ? m.cl : null), wins = T ? T.wins : (m ? m.w : null);
+    var wr = num(closed) && closed > 0 && num(wins) ? wins / closed * 100 : null;
+    b.appendChild(stat("Total Scanned", int(T ? T.scanned : (k ? k[0] : null)), T ? "today " + int(T.scanned_today) : (k ? "" : "no data")));
+    b.appendChild(stat("Rugs Detected", int(T ? T.rugs : (k ? k[1] : null)), T ? "of " + int(T.checked) + " checked" : "", "bad"));
+    b.appendChild(stat("Paper Trades", int(T ? T.trades : (k ? k[2] : null)), T ? T.open + " open" : ""));
+    b.appendChild(stat("Win Rate", num(wr) ? Math.round(wr) + "%" : "—", num(closed) ? (closed ? wins + "/" + closed + " closed" : "no closed trades") : "", num(wr) ? (wr >= 50 ? "good" : "bad") : ""));
+  }
+
+  function renderUnis(s) {
+    var b = document.getElementById("unis"); b.textContent = "";
+    b.appendChild(h("span", { class: "chip sol", title: "Solana only" }, "◎ Solana"));
+    var U = ins(s) ? ins(s).universes : null;
+    [["all", "ALL"]].concat(UNIS).forEach(function (u) {
+      var x = U && u[0] !== "all" ? U[u[0]] : null, pnl = x ? x.pnl_usd : null;
+      var lab = u[0] === "all" ? null : (U ? (x ? usd(pnl, true) : "$0.00") : "—");
+      b.appendChild(h("button", { type: "button", class: "chip" + (state.uniFilter === u[0] ? " on" : ""),
+        title: x ? x.closed + " closed · " + x.open + " open (paper)" : "no paper trades in this universe yet",
+        onclick: function () { state.uniFilter = u[0]; render(); } }, u[1], lab ? h("small", { class: cls(pnl), text: lab }) : null));
+    });
+  }
+
+  function renderOverview(s, m) {
+    var b = body("overview");
+    if (!s && !m) { b.appendChild(empty("No paper account data yet.")); return; }
+    var a = s ? s.account : null, i = ins(s);
+    var useM = !!m;
+    var eq = useM ? m.eq : a.equity, start = useM ? m.sb : a.start_balance;
+    var tp = useM ? m.tp : (i ? i.today.pnl_usd : null);
+    var base = i ? i.today.base : null;
+    var tpp = num(tp) ? (i && !useM ? i.today.pnl_pct : (num(eq) && eq - tp ? tp / (eq - tp) * 100 : null)) : null;
+    var ret = num(eq) && num(start) && start ? (eq - start) / start * 100 : null;
+    b.appendChild(h("div", { class: "eqhead" },
+      h("div", null, h("div", { class: "eqlabel", text: "Paper equity · PAPER ONLY" }), h("div", { class: "eq", text: usd(eq) }),
+        h("div", { class: "today " + cls(tp), text: num(tp) ? usd(tp, true) + " (" + pct(tpp) + ") today" : "today —" })),
+      h("div", { class: "meta", text: "start " + usd(start) + " · all-time " + pct(ret) })));
+    var pts = s && s.equity_curve && s.equity_curve.length ? s.equity_curve.map(function (p) { return [p[0], p[1]]; })
+      : (m && m.ec && m.ec.length ? m.ec.map(function (c, j) { return [j, c / 100]; }) : []);
+    if (pts.length < 2) b.appendChild(empty("Not enough equity points yet (one is saved every few minutes while trades are open)."));
+    else b.appendChild(chart(pts, start, !(s && s.equity_curve && s.equity_curve.length)));
+    void base;
+  }
+
+  function renderSide(s, m) {
+    var b = document.getElementById("side"); b.textContent = "";
+    var T = ins(s) ? ins(s).totals : null, a = s ? s.account : null;
+    b.appendChild(h("div", { class: "sc rug" }, h("div", { class: "k", text: "Rugs Blocked" }), h("div", { class: "v", text: int(T ? T.rugs_today : null) }),
+      h("div", { class: "m", text: T ? "today · " + int(T.checked_today) + " checked" : (m ? "needs full data" : "no data") })));
+    b.appendChild(h("div", { class: "sc trd" }, h("div", { class: "k", text: "Trades Executed" }), h("div", { class: "v", text: int(T ? T.trades_today : (m ? m.td : null)) }),
+      h("div", { class: "m", text: "today" + (a ? " / target " + a.daily_target : "") + (T ? " · " + T.open + " open" : "") })));
+  }
+
+  function renderRugFilter(s) {
+    var b = body("rugfilter");
+    if (!s) return needFull(b, "The rug filter");
+    var i = ins(s);
+    if (!i) return b.appendChild(empty("This snapshot is from an older bot version (no rug-filter data). Update the bot."));
+    var T = i.totals;
+    b.appendChild(h("div", { class: "rf3" }, kv("Scanned", int(T.checked)), kv("Rejected", int(T.rugs), "bad"), kv("Traded", int(T.trades), "good")));
+    b.appendChild(h("div", { class: "meta", text: "Unique tokens through the safety checker " + sinceTxt(s) + " " + tzLabel() + ". Traded = paper trades (all time)." }));
+    b.appendChild(h("h3", { text: "Top reject reasons" }));
+    if (!i.reject_reasons.length) return b.appendChild(empty("No safety rejects counted yet."));
+    var max = i.reject_reasons[0].n || 1, L = h("div", { class: "bars" });
+    i.reject_reasons.forEach(function (r) {
+      var f = h("div", { class: "bf" }); f.style.width = Math.max(3, Math.round(r.n / max * 100)) + "%";
+      L.appendChild(h("div", { class: "bar" }, h("div", { class: "bl" }, h("span", { text: String(r.code).replace(/_/g, " ") }),
+        h("span", { class: "muted", text: int(r.n) + (T.rugs ? " · " + Math.round(r.n / T.rugs * 100) + "%" : "") })), h("div", { class: "bt2" }, f)));
+    });
+    b.appendChild(L);
+    b.appendChild(h("div", { class: "meta", text: "A rejected token can have several reasons, so the bars add up to more than the rejects." }));
+  }
+
+  function renderKillLog(s) {
+    var b = body("killlog");
+    if (!s) return needFull(b, "The kill log");
+    var i = ins(s);
+    if (!i) return b.appendChild(empty("This snapshot is from an older bot version (no event feed)."));
+    var chips = h("div", { class: "chips" });
+    [["all", "All"], ["BUY", "BUY"], ["SELL", "SELL"], ["KILL", "KILL"]].forEach(function (k) {
+      chips.appendChild(h("button", { type: "button", class: state.evFilter === k[0] ? "on" : "", text: k[1],
+        onclick: function () { state.evFilter = k[0]; renderKillLog(state.snap); } }));
+    });
+    b.appendChild(chips);
+    var rows = i.events.filter(function (e) { return (state.evFilter === "all" || e.kind === state.evFilter) && (state.uniFilter === "all" || e.universe === state.uniFilter); });
+    if (!rows.length) return b.appendChild(empty("No " + (state.evFilter === "all" ? "" : state.evFilter + " ") + "events yet" + (state.uniFilter === "all" ? "." : " in " + uniLabel(state.uniFilter) + ".")));
+    var L = h("div", { class: "feed" });
+    rows.forEach(function (e) {
+      var right = e.kind === "SELL" ? h("span", { class: "rt " + cls(e.pnl_usd), text: usd(e.pnl_usd, true) + (num(e.pnl_pct) ? " " + pct(e.pnl_pct) : "") })
+        : h("span", { class: "rt muted", text: uniLabel(e.universe) });
+      L.appendChild(h("div", { class: "ev" }, h("span", { class: "tm", text: fmtTime(e.ts) }), h("span", { class: "badge " + e.kind, text: e.kind }),
+        h("div", { class: "mn" }, h("div", { class: "sy" }, dexLink(e.mint, sym(e.symbol) === "?" ? short(e.mint) : sym(e.symbol))),
+          h("div", { class: "rs", text: e.kind === "SELL" ? (e.reason || "closed") + " · " + uniLabel(e.universe) : (e.reason || "") })), right));
+    });
+    b.appendChild(L);
+    b.appendChild(h("div", { class: "meta", text: "Times in " + tzLabel() + ". KILL = blocked by the rug filter or rejected by the signal score. BUY/SELL = paper trades." }));
+  }
+
+  function renderSettings() {
+    var b = body("settings");
+    b.appendChild(h("div", { class: "meta", text: "Theme" }));
+    var o = h("div", { class: "opt" });
+    [["shadow", "Shadow dark"], ["telegram", "Telegram theme"]].forEach(function (x) {
+      o.appendChild(h("button", { type: "button", class: theme() === x[0] ? "on" : "", text: x[1], onclick: function () {
+        try { localStorage.setItem("shadow_theme", x[0]); } catch (e) { /* storage blocked */ }
+        location.reload(); } }));
+    });
+    b.appendChild(o);
+    b.appendChild(h("div", { class: "grid" }, kv("Mode", "PAPER ONLY"), kv("Chain", "Solana"), kv("Wallet / keys", "none"),
+      kv("Auto refresh", "every 2 min"), kv("Times", tzLabel())));
+    b.appendChild(h("div", { class: "meta", text: "Bot settings are changed in Telegram (/pause, /resume, /status). This page only reads data." }));
   }
 
   function renderAccount(s, m) {
@@ -159,12 +282,9 @@
     if (!s && !m) { b.appendChild(empty("No paper account data yet.")); return; }
     var a = s ? s.account : null;
     var eq = m ? m.eq : a.equity, start = m ? m.sb : a.start_balance, cash = m ? m.c : a.cash;
-    var ret = num(eq) && num(start) && start ? (eq - start) / start * 100 : null;
-    b.appendChild(h("div", { class: "big" }, usd(eq), h("small", { class: cls(ret), text: pct(ret) })));
-    b.appendChild(h("div", { class: "meta", text: "Equity (cash + open positions) · start " + usd(start) + " · PAPER ONLY" }));
     var closedN = m ? m.cl : a.closed.n, wins = m ? m.w : a.closed.wins;
     b.appendChild(h("div", { class: "grid" },
-      kv("Cash", usd(cash)),
+      kv("Equity", usd(eq)), kv("Start", usd(start)), kv("Cash", usd(cash)),
       kv("Realized P&L", usd(m ? m.rp : a.realized_pnl, true), cls(m ? m.rp : a.realized_pnl)),
       kv("Unrealized P&L", usd(m ? m.up : a.unrealized_pnl, true), cls(m ? m.up : a.unrealized_pnl)),
       kv("Open", n(m ? m.o : a.n_open) + (a ? " / " + a.max_open : "")),
@@ -172,31 +292,41 @@
       kv("Closed · win rate", n(closedN) + " · " + (closedN ? Math.round(wins / closedN * 100) + "%" : "—")),
       a ? kv("Fees paid", usd(a.fees_paid)) : null,
       a ? kv("Trade size", usd(a.trade_size)) : null));
-    var pts = s && s.equity_curve && s.equity_curve.length ? s.equity_curve.map(function (p) { return [p[0], p[1]]; })
-      : (m && m.ec && m.ec.length ? m.ec.map(function (c, i) { return [i, c / 100]; }) : []);
-    b.appendChild(h("h3", { text: "Equity curve" }));
-    if (pts.length < 2) b.appendChild(empty("Not enough equity points yet (one is saved every few minutes while trades are open)."));
-    else b.appendChild(chart(pts, start, !(s && s.equity_curve && s.equity_curve.length)));
+    b.appendChild(h("div", { class: "meta", text: "Equity = cash + open positions. Virtual money only." }));
   }
 
   function chart(pts, base, indexX) {
-    var NS = "http://www.w3.org/2000/svg", W = 340, H = 150, P = 22;
+    var NS = "http://www.w3.org/2000/svg", W = 340, H = 160, P = 8, PB = 18;
     var xs = pts.map(function (p) { return p[0]; }), ys = pts.map(function (p) { return p[1]; }).filter(num);
     if (num(base)) ys.push(base);
     var x0 = Math.min.apply(null, xs), x1 = Math.max.apply(null, xs), y0 = Math.min.apply(null, ys), y1 = Math.max.apply(null, ys);
     if (y1 - y0 < 0.01) { y0 -= 0.5; y1 += 0.5; }
+    var pad = (y1 - y0) * 0.12; y0 -= pad; y1 += pad;
     function X(v) { return P + (x1 > x0 ? (v - x0) / (x1 - x0) : 0.5) * (W - 2 * P); }
-    function Y(v) { return H - P + 6 - (v - y0) / (y1 - y0) * (H - 2 * P); }
+    function Y(v) { return 10 + (1 - (v - y0) / (y1 - y0)) * (H - 10 - PB); }
     var svg = document.createElementNS(NS, "svg");
     svg.setAttribute("viewBox", "0 0 " + W + " " + H); svg.setAttribute("class", "chart"); svg.setAttribute("role", "img");
     svg.setAttribute("aria-label", "Paper equity curve");
-    function el(t, a, txt) { var e = document.createElementNS(NS, t); for (var k in a) e.setAttribute(k, a[k]); if (txt) e.textContent = txt; svg.appendChild(e); return e; }
-    if (num(base)) el("line", { x1: P, x2: W - P, y1: Y(base), y2: Y(base), stroke: "#8b949e", "stroke-dasharray": "3 4", "stroke-width": 1 });
-    var last = pts[pts.length - 1][1], up = !num(base) || last >= base;
-    var d = pts.filter(function (p) { return num(p[1]); }).map(function (p, i) { return (i ? "L" : "M") + X(p[0]).toFixed(1) + " " + Y(p[1]).toFixed(1); }).join(" ");
-    el("path", { d: d, fill: "none", stroke: up ? "#22c55e" : "#ef4444", "stroke-width": 2, "stroke-linejoin": "round" });
-    el("text", { x: 4, y: 12 }, usd(y1)); el("text", { x: 4, y: H - 4 }, usd(y0));
-    if (!indexX) { el("text", { x: P + 40, y: H - 4, "text-anchor": "start" }, fmtTime(x0, true)); el("text", { x: W - 4, y: H - 4, "text-anchor": "end" }, fmtTime(x1, true)); }
+    function el(t, a, txt, parent) { var e = document.createElementNS(NS, t); for (var k in a) e.setAttribute(k, a[k]); if (txt) e.textContent = txt; (parent || svg).appendChild(e); return e; }
+    var good = pts.filter(function (p) { return num(p[1]); });
+    var last = good[good.length - 1], up = !num(base) || last[1] >= base, col = up ? "#22e58b" : "#ff4d6d";
+    var defs = el("defs", {});
+    var g = el("linearGradient", { id: "eqfill", x1: 0, y1: 0, x2: 0, y2: 1 }, null, defs);
+    el("stop", { offset: "0", "stop-color": col, "stop-opacity": ".38" }, null, g); el("stop", { offset: "1", "stop-color": col, "stop-opacity": "0" }, null, g);
+    var f = el("filter", { id: "glow", x: "-50%", y: "-50%", width: "200%", height: "200%" }, null, defs);
+    el("feGaussianBlur", { stdDeviation: "3.2" }, null, f);
+    [0.25, 0.5, 0.75].forEach(function (q) { el("line", { x1: P, x2: W - P, y1: 10 + q * (H - 10 - PB), y2: 10 + q * (H - 10 - PB), stroke: "rgba(167,139,250,.10)", "stroke-width": 1 }); });
+    if (num(base)) el("line", { x1: P, x2: W - P, y1: Y(base), y2: Y(base), stroke: "rgba(236,233,255,.35)", "stroke-dasharray": "3 4", "stroke-width": 1 });
+    var d = good.map(function (p, i) { return (i ? "L" : "M") + X(p[0]).toFixed(1) + " " + Y(p[1]).toFixed(1); }).join(" ");
+    el("path", { d: d + " L" + X(last[0]).toFixed(1) + " " + (H - PB) + " L" + X(good[0][0]).toFixed(1) + " " + (H - PB) + " Z", fill: "url(#eqfill)", stroke: "none" });
+    el("path", { d: d, fill: "none", stroke: col, "stroke-width": 2.2, "stroke-linejoin": "round", "stroke-linecap": "round" });
+    var cx = X(last[0]), cy = Y(last[1]);
+    el("circle", { cx: cx, cy: cy, r: 7, fill: col, opacity: ".55", filter: "url(#glow)" });
+    el("circle", { cx: cx, cy: cy, r: 3.6, fill: "#fff", stroke: col, "stroke-width": 2 });
+    var hi = Math.max.apply(null, ys), lo = Math.min.apply(null, ys);
+    el("text", { x: W - P, y: 9, "text-anchor": "end" }, usd(hi));
+    if (hi - lo >= 0.01) el("text", { x: W - P, y: H - PB - 3, "text-anchor": "end" }, usd(lo));
+    if (!indexX) { el("text", { x: P, y: H - 4, "text-anchor": "start" }, fmtTime(x0, true)); el("text", { x: W - P, y: H - 4, "text-anchor": "end" }, fmtTime(x1, true) + " " + tzLabel()); }
     return svg;
   }
 
@@ -249,7 +379,7 @@
     var chips = h("div", { class: "chips" });
     [["all", "All"]].concat(UNIS).forEach(function (u) {
       chips.appendChild(h("button", { type: "button", class: state.uniFilter === u[0] ? "on" : "", text: u[1],
-        onclick: function () { state.uniFilter = u[0]; renderSignals(state.snap, state.sum); } }));
+        onclick: function () { state.uniFilter = u[0]; render(); } }));
     });
     b.appendChild(chips);
     var rows = s.signals.recent.filter(function (r) { return state.uniFilter === "all" || r.universe === state.uniFilter; });
@@ -350,25 +480,48 @@
   }
 
   // ---------------------------------------------------------------- Telegram theme + boot
+  function theme() { try { return localStorage.getItem("shadow_theme") === "telegram" ? "telegram" : "shadow"; } catch (e) { return "shadow"; } }
   function initTelegram() {
     tg = window.Telegram && window.Telegram.WebApp;
     if (!tg) return;
     try {
       tg.ready(); tg.expand();
       var p = tg.themeParams || {}, r = document.documentElement.style;
-      if (tg.colorScheme === "dark") {
-        if (p.bg_color) r.setProperty("--bg", p.bg_color);
-        if (p.secondary_bg_color) r.setProperty("--card", p.secondary_bg_color);
-        if (p.text_color) r.setProperty("--text", p.text_color);
-        if (p.hint_color) r.setProperty("--muted", p.hint_color);
+      if (theme() === "telegram") {                  // optional: follow the Telegram colours (default = Shadow dark)
+        document.body.classList.add("tgtheme");
+        if (tg.colorScheme === "dark") {
+          if (p.bg_color) r.setProperty("--bg", p.bg_color);
+          if (p.secondary_bg_color) r.setProperty("--card", p.secondary_bg_color);
+          if (p.text_color) r.setProperty("--text", p.text_color);
+          if (p.hint_color) r.setProperty("--muted", p.hint_color);
+        }
+        if (p.button_color) r.setProperty("--accent", p.button_color);
+        if (p.button_text_color) r.setProperty("--accent-text", p.button_text_color);
       }
-      if (p.button_color) r.setProperty("--accent", p.button_color);
-      if (p.button_text_color) r.setProperty("--accent-text", p.button_text_color);
-      var bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#0e1117";
+      var bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#07071a";
       if (tg.setHeaderColor) tg.setHeaderColor(bg);
       if (tg.setBackgroundColor) tg.setBackgroundColor(bg);
+      if (tg.setBottomBarColor) tg.setBottomBarColor(bg);
     } catch (e) { /* older Telegram versions */ }
   }
+  function showTab(id, scroll) {
+    var tabs = document.querySelectorAll("#tabs button");
+    for (var i = 0; i < tabs.length; i++) tabs[i].classList.toggle("on", tabs[i].getAttribute("data-tab") === id);
+    var ps = document.querySelectorAll(".panel");
+    for (var j = 0; j < ps.length; j++) ps[j].classList.toggle("on", ps[j].id === "tab-" + id);
+    var nb = document.querySelectorAll("#bottom button");
+    for (var k = 0; k < nb.length; k++) nb[k].classList.toggle("on", nb[k].getAttribute("data-go") === (scroll ? id : "top"));
+    if (scroll) document.getElementById("tabs").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  document.getElementById("tabs").addEventListener("click", function (ev) {
+    var t = ev.target.closest && ev.target.closest("button[data-tab]"); if (t) showTab(t.getAttribute("data-tab"), false);
+  });
+  document.getElementById("bottom").addEventListener("click", function (ev) {
+    var t = ev.target.closest && ev.target.closest("button[data-go]"); if (!t) return;
+    var g = t.getAttribute("data-go");
+    if (g === "top") { window.scrollTo({ top: 0, behavior: "smooth" }); showTab(document.querySelector("#tabs button.on").getAttribute("data-tab"), false); }
+    else showTab(g, true);
+  });
   document.getElementById("refresh").addEventListener("click", function () { load(); });
   if (window.Telegram && window.Telegram.WebApp) initTelegram();
   else window.addEventListener("load", initTelegram);

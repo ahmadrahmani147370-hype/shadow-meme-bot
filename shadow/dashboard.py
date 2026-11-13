@@ -25,7 +25,7 @@ import httpx
 from .config import Settings
 from .db import Database
 
-PHASE = 9
+PHASE = 9   # + v1.1 insights block (rug filter, kill log, per-universe P&L)
 IMPLEMENTED = True
 SCHEMA = 1
 log = logging.getLogger("shadow.dashboard")
@@ -171,6 +171,7 @@ def build_snapshot(db: Database, s: Settings, app_status: dict | None = None, no
                "seen_in_db": con.execute("SELECT COUNT(*) FROM seen_tokens").fetchone()[0]}
     if paused is None:
         paused = db.meta_get("paused", "0") == "1"
+    insights = build_insights(db, s, account, positions, now, since)
     return {"schema": SCHEMA, "app": "SHADOW MEME", "version": __version__, "paper_only": True,
             "instance": instance_id(db), "generated_ts": round(now), "tz": tz_name(),
             "status": {"state": ("paused" if paused else "running") if app_status is not None else "offline",
@@ -178,7 +179,125 @@ def build_snapshot(db: Database, s: Settings, app_status: dict | None = None, no
             "account": account, "equity_curve": curve, "positions": positions, "history": history,
             "signals": {"today": counts(since), "last24h": counts(now - 86400), "recent": recent},
             "judge": judge, "strategies": strategies, "judge_params": judge_params, "updates": updates,
-            "scanner": scanner}
+            "scanner": scanner, "insights": insights}
+
+
+# ====================================================================== insights (v1.1 dashboard design)
+MAX_EVENTS = 40
+MAX_REASONS = 8
+
+
+def update_counters(db: Database, now: float, since: float) -> dict:
+    with db.tx():
+        return _update_counters(db, now, since)
+
+
+def _update_counters(db: Database, now: float, since: float) -> dict:
+    """Cumulative scan / safety counters. safety_reports (3 h) and seen_tokens (24 h) are pruned, so the dashboard
+    keeps running totals in DB meta, advanced by a cursor on every snapshot build (builds run every few minutes,
+    far inside the retention windows). Real counts only; `since` says from when they were counted."""
+    con = db.con
+    try:
+        c = json.loads(db.meta_get("dash_counters") or "{}")
+    except (TypeError, ValueError):
+        c = {}
+    if not isinstance(c, dict) or "since" not in c:
+        c = {"since": round(now), "cur_seen": 0.0, "cur_safety": 0.0, "scanned": 0, "checked": 0, "rugs": 0,
+             "reasons": {}, "day": since, "d_scanned": 0, "d_checked": 0, "d_rugs": 0}
+    if c.get("day") != since:
+        c.update(day=since, d_scanned=0, d_checked=0, d_rugs=0)
+    cur_seen, cur_safety = float(c.get("cur_seen") or 0), float(c.get("cur_safety") or 0)
+    for (ts,) in con.execute("SELECT first_seen_ts FROM seen_tokens WHERE first_seen_ts>? AND first_seen_ts<=?",
+                             (cur_seen, now)):
+        c["scanned"] += 1
+        c["d_scanned"] += ts >= since
+        cur_seen = max(cur_seen, ts)
+    con.execute("CREATE TABLE IF NOT EXISTS dash_counted (mint TEXT PRIMARY KEY, ts REAL, rejected INTEGER)")
+    for mint, ts, verdict, crit in con.execute(
+            "SELECT mint, checked_ts, verdict, critical_json FROM safety_reports WHERE checked_ts>? AND checked_ts<=? "
+            "ORDER BY checked_ts", (cur_safety, now)).fetchall():
+        cur_safety = max(cur_safety, ts)
+        today, rej = ts >= since, verdict == "REJECT"
+        prev = con.execute("SELECT rejected FROM dash_counted WHERE mint=?", (mint,)).fetchone()
+        if prev is None:                                     # each token counted once, even when re-checked
+            c["checked"] += 1
+            c["d_checked"] += today
+            con.execute("INSERT INTO dash_counted (mint, ts, rejected) VALUES (?,?,?)", (mint, ts, int(rej)))
+        elif prev[0] or not rej:
+            continue
+        else:
+            con.execute("UPDATE dash_counted SET rejected=1, ts=? WHERE mint=?", (ts, mint))
+        if rej:
+            c["rugs"] += 1
+            c["d_rugs"] += today
+            try:
+                codes = json.loads(crit or "[]") or ["low_safety_score"]
+            except (TypeError, ValueError):
+                codes = ["low_safety_score"]
+            for code in codes[:6]:
+                code = _s(code, 40)
+                if code:
+                    c["reasons"][code] = c["reasons"].get(code, 0) + 1
+    con.execute("DELETE FROM dash_counted WHERE ts<?", (now - 2 * 86400,))
+    if len(c["reasons"]) > 60:                               # keep meta small
+        c["reasons"] = dict(sorted(c["reasons"].items(), key=lambda kv: -kv[1])[:40])
+    c["cur_seen"], c["cur_safety"] = cur_seen, cur_safety
+    db.meta_set("dash_counters", json.dumps(c, separators=(",", ":")))
+    return c
+
+
+def build_insights(db: Database, s: Settings, account: dict, positions: list, now: float, since: float) -> dict:
+    con = db.con
+    c = update_counters(db, now, since)
+    opened = con.execute("SELECT COUNT(*), COALESCE(SUM(open_ts>=?),0) FROM paper_positions", (since,)).fetchone()
+    totals = {"since": c["since"], "scanned": c["scanned"], "checked": c["checked"], "rugs": c["rugs"],
+              "scanned_today": c["d_scanned"], "checked_today": c["d_checked"], "rugs_today": c["d_rugs"],
+              "trades": opened[0], "trades_today": opened[1], "open": account["n_open"],
+              "closed": account["closed"]["n"], "wins": account["closed"]["wins"],
+              "win_rate": account["closed"]["win_rate"]}
+    reasons = [{"code": k, "n": v} for k, v in sorted(c["reasons"].items(), key=lambda kv: (-kv[1], kv[0]))[:MAX_REASONS]]
+
+    unis = {}
+    for u, n, w, pnl in con.execute("SELECT universe, COUNT(*), SUM(pnl_usd>0), COALESCE(SUM(pnl_usd),0) "
+                                    "FROM paper_positions WHERE status='closed' GROUP BY 1"):
+        unis[u or "?"] = {"closed": n, "wins": w or 0, "realized": _r(pnl, 4), "open": 0, "unrealized": 0.0}
+    for p in positions:
+        x = unis.setdefault(p["universe"] or "?", {"closed": 0, "wins": 0, "realized": 0.0, "open": 0, "unrealized": 0.0})
+        x["open"] += 1
+        x["unrealized"] = _r(x["unrealized"] + (p["pnl_usd"] or 0), 4)
+    for x in unis.values():
+        x["pnl_usd"] = _r((x["realized"] or 0) + (x["unrealized"] or 0), 4)
+
+    base_row = con.execute("SELECT equity FROM paper_equity WHERE ts<? ORDER BY ts DESC LIMIT 1", (since,)).fetchone()
+    base = base_row[0] if base_row else account["start_balance"]
+    eq = account["equity"]
+    today = {"base": _r(base, 4), "pnl_usd": _r(eq - base, 4) if eq is not None and base else None,
+             "pnl_pct": _r((eq / base - 1) * 100, 3) if eq is not None and base else None}
+
+    ev = []
+    for r in con.execute("SELECT id, open_ts, symbol, mint, universe, strategy, size_usd FROM paper_positions "
+                         "ORDER BY open_ts DESC LIMIT 15"):
+        ev.append({"ts": round(r[1]), "kind": "BUY", "symbol": _s(r[2], MAX_SYMBOL), "mint": r[3], "universe": r[4],
+                   "reason": _s(f"paper buy ${r[6] or 0:.2f} · {r[5] or ''}", 80), "pnl_usd": None, "pnl_pct": None})
+    for r in con.execute("SELECT exit_ts, symbol, mint, universe, exit_reason, pnl_usd, pnl_pct FROM paper_positions "
+                         "WHERE status='closed' ORDER BY exit_ts DESC LIMIT 15"):
+        ev.append({"ts": round(r[0] or 0), "kind": "SELL", "symbol": _s(r[1], MAX_SYMBOL), "mint": r[2], "universe": r[3],
+                   "reason": _s(r[4], 40), "pnl_usd": _r(r[5], 4), "pnl_pct": _r(r[6], 2)})
+    for r in con.execute("SELECT s.checked_ts, t.symbol, s.mint, s.universe, s.critical_json FROM safety_reports s "
+                         "LEFT JOIN seen_tokens t ON t.mint=s.mint WHERE s.verdict='REJECT' "
+                         "ORDER BY s.checked_ts DESC LIMIT 20"):
+        try:
+            codes = json.loads(r[4] or "[]") or ["low_safety_score"]
+        except (TypeError, ValueError):
+            codes = ["low_safety_score"]
+        ev.append({"ts": round(r[0]), "kind": "KILL", "symbol": _s(r[1], MAX_SYMBOL), "mint": r[2], "universe": r[3],
+                   "reason": _s("rug filter: " + ", ".join(str(x) for x in codes[:4]), 100), "pnl_usd": None, "pnl_pct": None})
+    for r in con.execute("SELECT ts, symbol, mint, universe, reason FROM signals WHERE alert_type='REJECT' "
+                         "ORDER BY ts DESC LIMIT 15"):
+        ev.append({"ts": round(r[0]), "kind": "KILL", "symbol": _s(r[1], MAX_SYMBOL), "mint": r[2], "universe": r[3],
+                   "reason": _s("signal: " + (r[4] or "rejected"), 100), "pnl_usd": None, "pnl_pct": None})
+    ev.sort(key=lambda e: -e["ts"])
+    return {"totals": totals, "reject_reasons": reasons, "universes": unis, "today": today, "events": ev[:MAX_EVENTS]}
 
 
 def _metrics(m: dict) -> dict:
@@ -207,6 +326,8 @@ def summary(snap: dict) -> dict:
            "td": a["trades_today"], "cl": a["closed"]["n"], "w": a["closed"]["wins"],
            "sg": {u: [v.get("BUY_WATCH", 0), v.get("SELL", 0), v.get("REJECT", 0)] for u, v in sig.items()},
            "ja": j["approved"]["n"], "jv": j["vetoed"]["n"], "ver": snap["version"],
+           "k": [snap["insights"]["totals"][x] for x in ("scanned", "rugs", "trades")],
+           "tp": snap["insights"]["today"]["pnl_usd"],
            "ec": [round(e * 100) for _, e in downsample(snap["equity_curve"], 24) if e is not None]}
     if len(encode_summary(out)) > MAX_SUMMARY_CHARS:
         out.pop("ec")

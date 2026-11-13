@@ -96,7 +96,7 @@ def test_snapshot_never_contains_secrets_or_error_texts(tmp_path):
     assert "SHOULD_NOT_LEAK" not in raw and "api-key" not in raw and "secret_field" not in raw
     assert set(snap) == {"schema", "app", "version", "paper_only", "instance", "generated_ts", "tz", "status", "account",
                          "equity_curve", "positions", "history", "signals", "judge", "strategies", "judge_params",
-                         "updates", "scanner"}
+                         "updates", "scanner", "insights"}
     url = dash.dashboard_url(s, snap)
     for v in SECRETS.values():
         assert v not in url
@@ -294,7 +294,10 @@ def test_page_renders_full_snapshot_and_escapes_token_names(tmp_path, site):
     html = dom(f"{base}/index.html?data=snap.json&repo=o/r")
     for t in ("PAPER ONLY", "Paper account", "Open positions", "Trade history", "Signals per universe", "TOP VOLUME",
               "Judge", "early_entry v1", "strategy_update history", "param change", "tp_pct 30 → 33",
-              "better on unseen data", "Scanner health", "websocket+polling", "take_profit", "RUNNING"):
+              "better on unseen data", "Scanner health", "websocket+polling", "take_profit", "● LIVE", "Rug Filter",
+              "Kill Log (Live)", "Total Scanned", "Rugs Detected", "Paper Trades", "Win Rate", "Rugs Blocked",
+              "Trades Executed", "Rug Scanner", "Trade Log", "Strategies/Judge", "Settings", "Dashboard", "Analytics",
+              "Solana", "+$0.28", "100%"):
         assert t in html, t
     assert "&lt;img src=x onerror=alert" in html and "<img src=x" not in html   # text only (symbol cut to 24 chars)
     assert "No open paper positions" not in html
@@ -307,7 +310,8 @@ def test_page_empty_snapshot_shows_empty_states(tmp_path, site):
     db = Database(str(tmp_path / "d.db"))
     (d / "e.json").write_bytes(dash.snapshot_json(dash.build_snapshot(db, s, now=NOW)))
     html = dom(f"{base}/index.html?data=e.json")
-    for t in ("No open paper positions.", "No closed paper trades yet.", "No BUY WATCH / SELL signals yet.",
+    for t in ("No safety rejects counted yet.", "No events yet.", "PAPER ONLY", "Rugs Blocked",
+              "No open paper positions.", "No closed paper trades yet.", "No BUY WATCH / SELL signals yet.",
               "No judge decisions yet", "No self-learning changes yet", "Not enough equity points yet",
               "Snapshot made from the database while the bot was not running."):
         assert t in html, t
@@ -347,7 +351,7 @@ def test_page_flags_stale_data(tmp_path, site):
     import time as _t
     (d / "old.json").write_bytes(dash.snapshot_json(dash.build_snapshot(db, s, {}, now=_t.time() - 3600)))
     html = dom(f"{base}/index.html?data=old.json")
-    assert "NO UPDATE" in html and "may be stopped" in html and "RUNNING" not in html
+    assert "NO UPDATE" in html and "may be stopped" in html and "● LIVE" not in html
 
 
 # ------------------------------------------------------------------ gh CLI publisher (no token in .env)
@@ -402,3 +406,64 @@ def test_make_publisher_modes(tmp_path):
     assert isinstance(dash.make_publisher(load_settings(env={**base, "GITHUB_TOKEN": "t" * 20})), dash.GitHubPublisher)
     assert type(dash.make_publisher(load_settings(env={**base, "DASHBOARD_PUBLISHER": "gh"}))) is dash.GhCliPublisher
     assert dash.make_publisher(load_settings(env={**base, "GITHUB_TOKEN": "t" * 20, "DASHBOARD_PUBLISHER": "off"})) is None
+
+
+# ------------------------------------------------------------------ v1.1 insights (rug filter, kill log, universe P&L)
+def _safety(db, mint, ts, verdict, crit):
+    db.con.execute("INSERT OR REPLACE INTO safety_reports (mint, checked_ts, expires_ts, score, verdict, critical_json, "
+                   "flags_json, data_json, partial, universe) VALUES (?,?,?,?,?,?,?,?,0,'new')",
+                   (mint, ts, ts + 600, 0 if verdict == "REJECT" else 80, verdict, json.dumps(crit), "[]", "{}"))
+
+
+def test_insights_counts_unique_tokens_reasons_and_events(tmp_path):
+    s, db, clock = filled(tmp_path)
+    t0 = clock["t"]
+    db.con.execute("INSERT INTO seen_tokens (mint, symbol, source, first_seen_ts, status) VALUES (?,?,?,?,'new')",
+                   ("R" * 44, "<b>RUG</b>", "pumpportal", t0 - 50))
+    _safety(db, "R" * 44, t0 - 40, "REJECT", ["liquidity_too_low", "rug_warning"])
+    _safety(db, "P" * 44, t0 - 30, "PASS", [])
+    snap = dash.build_snapshot(db, s, now=t0)
+    i = snap["insights"]
+    assert i["totals"]["checked"] == 2 and i["totals"]["rugs"] == 1 and i["totals"]["scanned"] == 1
+    assert i["totals"]["trades"] == 2 and i["totals"]["closed"] == 1 and i["totals"]["open"] == 1
+    assert {r["code"]: r["n"] for r in i["reject_reasons"]} == {"liquidity_too_low": 1, "rug_warning": 1}
+    assert i["universes"]["new"]["closed"] == 1 and i["universes"]["new"]["pnl_usd"] > 0 and "volume" not in i["universes"]
+    kinds = [e["kind"] for e in i["events"]]
+    assert {"BUY", "SELL", "KILL"} <= set(kinds) and i["events"] == sorted(i["events"], key=lambda e: -e["ts"])
+    kill = next(e for e in i["events"] if e["kind"] == "KILL" and e["mint"] == "R" * 44)
+    assert kill["symbol"] == "<b>RUG</b>" and "liquidity_too_low" in kill["reason"]
+    assert i["today"]["pnl_usd"] == round(snap["account"]["equity"] - s.paper_start_balance, 4)
+    # re-check of the same token, a PASS turning into REJECT, and pruning of the source table: counted once each
+    _safety(db, "R" * 44, t0 + 100, "REJECT", ["liquidity_too_low"])
+    _safety(db, "P" * 44, t0 + 110, "REJECT", ["serial_creator"])
+    i2 = dash.build_snapshot(db, s, now=t0 + 200)["insights"]
+    assert i2["totals"]["checked"] == 2 and i2["totals"]["rugs"] == 2
+    db.con.execute("DELETE FROM safety_reports")
+    db.con.execute("DELETE FROM seen_tokens")
+    i3 = dash.build_snapshot(db, s, now=t0 + 300)["insights"]
+    assert i3["totals"]["rugs"] == 2 and i3["totals"]["scanned"] == 1      # running totals survive retention
+    assert {r["code"]: r["n"] for r in i3["reject_reasons"]}["serial_creator"] == 1
+    for v in SECRETS.values():
+        assert v not in dash.snapshot_json(dash.build_snapshot(db, s, now=t0 + 400)).decode()
+
+
+def test_summary_carries_headline_totals(tmp_path):
+    s, db, clock = filled(tmp_path)
+    snap = dash.build_snapshot(db, s, now=clock["t"])
+    m = dash.decode_summary(dash.dashboard_url(s, snap).split("?s=", 1)[1])
+    assert m["k"] == [snap["insights"]["totals"][k] for k in ("scanned", "rugs", "trades")]
+    assert m["tp"] == snap["insights"]["today"]["pnl_usd"]
+
+
+@needs_chrome
+def test_page_kill_log_escapes_symbols_and_shows_reasons(tmp_path, site):
+    d, base = site
+    s, db, clock = filled(tmp_path)
+    db.con.execute("INSERT INTO seen_tokens (mint, symbol, source, first_seen_ts, status) VALUES (?,?,?,?,'new')",
+                   ("R" * 44, "<svg onload=alert(2)>", "pumpportal", clock["t"] - 50))
+    _safety(db, "R" * 44, clock["t"] - 40, "REJECT", ["liquidity_too_low"])
+    (d / "k.json").write_bytes(dash.snapshot_json(dash.build_snapshot(db, s, {"scanner_mode": "x"}, now=clock["t"])))
+    html = dom(f"{base}/index.html?data=k.json")
+    assert "&lt;svg onload=alert(2)&gt;" in html and "<svg onload" not in html
+    assert "liquidity too low" in html and "rug filter: liquidity_too_low" in html and "KILL" in html
+    assert "ETH" not in html and "BNB" not in html and "BASE" not in html
