@@ -351,3 +351,30 @@ def test_schema_v3_universe_columns_and_members(tmp_path):
     assert sorted(db.universes_of("BIG")) == ["mcap", "volume"] and db.universe_mints("volume") == ["BIG"]
     db.save_safety(ev("usdc").to_row())
     assert db.get_safety(T["usdc"])["universe"] == "new"
+
+
+# ---------------------------------------------------------------- phase 5 integration hooks
+def test_priority_queue_and_near_fn(tmp_path):
+    c, db, log = make(tmp_path)
+    mints = ["m1", "m2", "m3"]
+    mk = {m: MarketData(m, vol_m5=v) for m, v in zip(mints, (900, 500, 100))}
+    assert c.due_mints(mints, mk, 3) == ["m1", "m2", "m3"]
+    c.prioritize("m3")
+    assert c.due_mints(mints, mk, 2) == ["m3", "m1"]
+    c.request_quote("a")
+    c.request_quote("b")
+    c.request_quote("b", priority=True)
+    assert list(c.quote_queue) == ["b", "a"]
+    rep = sf.SafetyReport("a", NOW, NOW + 60, 90, sf.PASS)
+    assert c.near_signal(MarketData("a", vol_m5=10**6, buys_m5=9, sells_m5=1), rep)   # standalone fallback
+    c.near_fn = lambda mint, md, r: mint == "zzz"
+    assert not c.near_signal(MarketData("a", vol_m5=10**6, buys_m5=9, sells_m5=1), rep)  # engine decides
+
+
+def test_rugcheck_negative_cache(tmp_path):
+    c, db, log = make(tmp_path)
+    unknown = "U" * 44                         # mocked RugCheck answers 400, like "unable to generate report"
+    assert asyncio.run(c.rugcheck(unknown)) == (None, None)
+    n = len(log)
+    assert asyncio.run(c.rugcheck(unknown)) == (None, None)
+    assert len(log) == n and c.stats["rc_skipped_missing"] == 1

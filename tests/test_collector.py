@@ -369,7 +369,7 @@ def test_schema_upgrade_v1_to_v2_keeps_seen_tokens(tmp_path):
     con.commit()
     con.close()
     db = Database(p)
-    assert db.version == SCHEMA_VERSION == 3 and db.is_seen("KEEP")
+    assert db.version == SCHEMA_VERSION == 4 and db.is_seen("KEEP")
     assert db.table_counts()["candles_1m"] == 0
 
 
@@ -414,3 +414,35 @@ def test_tracking_full_is_deferred_and_requeued_when_a_slot_frees(env):
     assert c.requeue_deferred(NOW + 300) == 1                                  # OLD aged out (>120 min)
     assert "C" in c.pending and c.pending["C"].enriched and not c.deferred
     assert c.stats["deferred_expired"] == 1 and c.stats["requeued_from_full"] == 1
+
+
+def test_migration_is_atomic_and_upgrades_prerelease_v3(tmp_path):
+    import sqlite3
+
+    from shadow.db import MIGRATIONS, SCHEMA_VERSION, Database
+    p = tmp_path / "old.db"
+    con = sqlite3.connect(p)
+    for i, m in enumerate(MIGRATIONS[:3]):           # a v3 database created before universe_members existed
+        con.executescript(m.split("-- a coin can be in several lists")[0] if i == 2 else m)
+    con.execute("PRAGMA user_version = 3")
+    con.close()
+    db = Database(str(p))
+    assert db.version == SCHEMA_VERSION
+    cols = [r[1] for r in db.con.execute("PRAGMA table_info(universe_members)")]
+    assert "rank_h1" in cols and "active" in cols
+    db.close()
+    # a failing step is rolled back completely
+    bad = tmp_path / "bad.db"
+    con = sqlite3.connect(bad)
+    con.execute("CREATE TABLE universe_members (mint TEXT, universe TEXT, first_ts REAL, last_ts REAL, rank INTEGER,"
+                " metric REAL, source TEXT, active INTEGER)")     # 'active' already there -> v4 ALTER fails midway
+    con.execute("PRAGMA user_version = 3")
+    con.commit()
+    con.close()
+    import pytest
+    with pytest.raises(sqlite3.OperationalError):
+        Database(str(bad))
+    con = sqlite3.connect(bad)
+    assert con.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert con.execute("SELECT count(*) FROM sqlite_master WHERE name='signals'").fetchone()[0] == 0
+    con.close()

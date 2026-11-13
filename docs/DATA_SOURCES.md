@@ -98,6 +98,22 @@ Other observations:
 | GeckoTerminal (scanner + hot set) | 4.4 | ~10 | 0 |
 | Solana RPC | 5.3 | ~50 per window | 0 |
 
+## Measured budget in phase 5 (new launches 200 + MCAP + TOP VOLUME + signals + judge, 11-minute live test)
+
+| Source | Calls/min measured | Keyless limit | 429s |
+|---|---|---|---|
+| DexScreener (new tracking + universe refresh every 30 s + validation) | 30.6 | 300 | 0 |
+| RugCheck (scanner + safety) | 29.3 | ~60–180 | 0 |
+| GeckoTerminal (scanner + hot set + 3 discovery lists every 5 min) | 4.8 | ~10 (bot limiter 6) | 0 |
+| Jupiter (price fill-in + quotes near a signal) | 4.5 | 30 | 0 |
+| Solana RPC | 4.0 | ~50 per window | 0 |
+
+Phase 5 findings: the free discovery lists (GeckoTerminal trending / top volume / top tx, DexScreener
+top boosts) give ~60 candidates; after the meme filter about 13 coins are ≥ $1M. There is no free
+"all coins above $1M" list, so the MCAP universe is "every $1M+ meme coin these lists and the
+new-launch collector have seen", not the whole market. GeckoTerminal is the tightest budget; a second
+page per list would add ~1.2 calls/min.
+
 ## Source plan for phases 2–4
 
 | Need | Primary | Fallback |

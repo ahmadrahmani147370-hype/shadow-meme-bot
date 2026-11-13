@@ -7,7 +7,7 @@ Solana meme coin scanner + **paper-trading** signal bot in Python, built for **A
 > private key, ever. `PAPER_ONLY` is a constant in the code; `.env` cannot turn it off.
 > Signals are not financial advice, and the bot reports only results it actually measured.
 
-## Status: Phase 4 of 10 ✅ (coin safety checker)
+## Status: Phase 5 of 10 ✅ (signals, strategies, judge, MCAP / TOP VOLUME universes)
 
 | Phase | What | Status |
 |---|---|---|
@@ -15,8 +15,8 @@ Solana meme coin scanner + **paper-trading** signal bot in Python, built for **A
 | 2 | Token scanner (PumpPortal stream + fallbacks) | ✅ done |
 | 3 | Data collection (price, mcap, liquidity, volume, buys/sells) | ✅ done |
 | 4 | Coin safety checker (strict) | ✅ done |
-| 5 | Signal engine + strategies + judge agent + MCAP / TOP VOLUME universes | ⏳ next |
-| 6 | Paper trading engine ($100, $2/trade, $0.50+$0.50 fees, max 5 open) | ⏳ |
+| 5 | Signal engine + strategies + judge agent + MCAP / TOP VOLUME universes | ✅ done |
+| 6 | Paper trading engine ($100, $2/trade, $0.50+$0.50 fees, max 5 open) + self-learning | ⏳ next |
 | 7 | SQLite database (positions survive restarts) | ⏳ |
 | 8 | Telegram commands, alerts, daily report | ⏳ |
 | 9 | Dashboard (Telegram Mini App on GitHub Pages) + self-improving strategies | ⏳ |
@@ -41,7 +41,8 @@ python -m shadow.doctor
 
 4. Android: **Settings → Apps → Termux → Battery → Unrestricted**, otherwise Android kills it in the background.
 5. Try the scanner (phase 2): `python main.py --debug scan 120`, the collector (phase 3): `python main.py --debug collect 300`,
-   and the safety checker (phase 4): `python main.py --debug safety <mint>` or `python main.py --debug safety-live 300`
+   the safety checker (phase 4): `python main.py --debug safety <mint>` or `python main.py --debug safety-live 300`,
+   and everything with signals + judge (phase 5): `python main.py --debug signals 600`
 6. From phase 8: `nano .env` (Telegram token + chat id), then `./start.sh`.
 
 **Telegram bot:** SHADOW MEME will use the existing **@Fathersigna147lBot** with owner chat id
@@ -69,6 +70,7 @@ pkg install -y git python && git clone https://github.com/ahmadrahmani147370-hyp
 5. Scanner test karein (phase 2): `python main.py --debug scan 120` — 2 minute tak naye coins aur migrations screen par aayenge, aakhir mein ginti.
    Collector test (phase 3): `python main.py --debug collect 300` — har coin ki price, market cap, liquidity, volume aur buys/sells, aur 1-minute candles. Aakhir mein batata hai kitne coins track hue, kitne kis wajah se chhore gaye, har API ko kitni calls gayin, aur CPU/RAM kitni lagi.
    Safety test (phase 4): `python main.py --debug safety <mint>` — ek coin ki poori safety report (mint/freeze authority, Token-2022, holders, insiders, dev, liquidity, fake volume, Jupiter par bechne ka test). `python main.py --debug safety-live 300` — 5 minute tak har naye coin ki report, aakhir mein kitne pass/reject hue aur kis wajah se.
+   Signals test (phase 5): `python main.py --debug signals 600` — 10 minute tak sab kuch live: naye coins, $1M+ MCAP coins, TOP VOLUME coins, safety, signals aur judge. Har BUY WATCH ke neeche judge ka faisla (APPROVE / VETO) aur wajah. Aakhir mein har list ke signals, judge ki ginti, API calls aur CPU/RAM. `quiet` likhein to REJECT lines screen par nahi aatin (ginti phir bhi hoti hai).
 6. Phase 8 ke baad: `nano .env` mein Telegram token aur chat id likhein, phir `./start.sh`.
 
 Scanner do tarah se coins dhoondta hai: PumpPortal websocket (live) aur GeckoTerminal + RugCheck polling. Test mein websocket ne sirf ~19% naye pump.fun coins diye, is liye polling hamesha on rehti hai. Ek coin dobara nahi aata, restart ke baad bhi nahi.
@@ -88,6 +90,21 @@ coins rug hue hon ya wo blacklist mein ho, ek creator ne 24 ghante mein 10+ coin
 liquidity $1,500 se kam, wash (jaali) volume, ya bohat trades lekin chand holders. RugCheck report
 na mile to faisla UNKNOWN — aise coin par kabhi trade nahi hoga. Sab hadd `.env` mein badal sakte
 hain (`SAFETY_...`). Default ab sakht (strict) hain: score 70 se kam = reject. `MAX_TRACKED` ab 200 hai.
+
+**Signals + judge (phase 5) – Roman Urdu:** ab teen lists hain: (1) **naye coins** (pehle jaise,
+200 tak), (2) **MCAP** — $1M ya zyada market cap wale meme coins, (3) **TOP VOLUME** — 24 ghante aur
+1 ghante mein sab se zyada volume wale coins. SOL, stablecoins, tokenized stocks aur bare coins
+(JUP/RAY/BONK/WIF/PUMP) shamil nahi, jab tak `.env` mein `UNIVERSE_ALLOW_MAJORS=true` na ho. Har
+coin par 10 detector chalte hain (1-minute aur 5-minute candles): early pump, pehli green candle,
+pehla pullback, volume barhna, buyers barhna, buy/sell pressure, breakout, pump thakan (exhaustion),
+migration breakout aur achanak dump. Score 0-100: 80+ Strong Watch, 65-79 Watch, 50-64 Weak, 50 se
+kam Reject — aur koi CRITICAL safety khatra ho to hamesha REJECT. Teen strategies (Early Entry,
+First Pullback, Migration Breakout) ke apne entry/SL/TP/time-stop hain, jo database mein version ke
+saath rakhe jaate hain taa ke phase 6 inhein khud behtar kar sake (aur wapas purane version par ja
+sake). Har BUY WATCH ko ek alag **judge** dekhta hai (muft, bina AI ke, sirf qaide): der se entry,
+kam liquidity, zyada price impact, purani Jupiter quote, dump ka khatra, ek jaise coins mein zyada
+watches, ya strategy ka nuqsan — in mein se kuch ho to VETO. Har faisla save hota hai; veto kiye
+gaye coins ka bhi baad mein nateeja dekha jaata hai, taa ke pata chale judge sahi tha ya nahi.
 
 Yaad rakhein: ye bot **sirf paper trading** karta hai. Na wallet, na private key, na asli paisa.
 Phone par 24 ghante lagatar chalne ki guarantee nahi — Android, battery aur network kabhi bhi rok sakte hain.
@@ -176,7 +193,7 @@ whatever the score**. No RugCheck report = `UNKNOWN`, which is never tradable.
 
 Budget at 200 tracked tokens (all keyless): RugCheck reports ≤ `SAFETY_RC_PER_MIN` (30/min; the
 scanner adds ~10/min), Jupiter quotes ≤ `SAFETY_QUOTES_PER_MIN` (8/min, only for passing, active
-tokens until phase 5 asks for quotes near a signal), RPC ~5/min. New tokens are checked first, then
+tokens; since phase 5 only coins near a real signal), RPC ~5/min. New tokens are checked first, then
 expired reports, busiest first. Re-checks: every 15 min, rejected tokens every 30 min, quotes valid
 3 min. All thresholds are in `.env` (`SAFETY_...`).
 
@@ -196,6 +213,71 @@ liquidity below the floor 86, rug warning 34, extreme holder concentration 8, wa
 insiders 2, few makers 2; low score only 2). Tracking reached the 200 cap after ~8 minutes. API
 calls per minute: DexScreener 29, RugCheck 33 (scanner + safety), Jupiter 9.5, GeckoTerminal 4.4,
 RPC 5.3; **zero 429s, zero errors**. CPU 0.7% average, RSS 51 MB, SQLite +3.7 MB in 10 minutes.
+
+## Signals, strategies, judge and universes (phase 5)
+
+```bash
+python main.py --debug signals 600          # everything live for 10 minutes, signals + judge verdicts per universe
+python main.py --debug signals 600 quiet    # same, without printing every REJECT line (still counted)
+```
+
+**Universes** (`shadow/universes.py`), each with its own cap and refresh, no age limit:
+
+| Universe | Members | Source | Detector / strategy parameters |
+|---|---|---|---|
+| `new` | new launches (phase 3 collector, `MAX_TRACKED`=200) | PumpPortal + GeckoTerminal + RugCheck | new-launch set |
+| `mcap` | Solana meme coins with market cap ≥ `UNIVERSE_MCAP_MIN` ($1M), liquidity ≥ $25k, max 100 | GeckoTerminal trending / top 24h volume / top tx pools + DexScreener top boosts + new launches that grew past $1M, ranked via DexScreener | calmer: smaller moves count |
+| `volume` | top `UNIVERSE_VOLUME_TOP_N` (30) by 24h volume ∪ top 30 by 1h volume (min $300k / $25k), max 50 | same lists | in between |
+
+A coin can be in several lists (`universe_members` keeps rank, 1h rank, mcap, volumes, active flag); a $1M+
+coin is evaluated with the MCAP parameters. The new-launch enrichment no longer overwrites a coin's universe.
+SOL, stables, LSTs, tokenized stocks and majors (JUP, RAY, BONK, WIF, PUMP, JTO, PYTH, ORCA) are dropped
+unless `UNIVERSE_ALLOW_MAJORS=true`; `UNIVERSE_EXCLUDE_MINTS` adds your own. Universe coins are snapshotted
+every 30 s (30 coins per DexScreener call) into the same 1m candles; lists are re-discovered every 5 min.
+
+**Detectors** (`shadow/signals.py`, local 1m candles + 5m resample + market data, one parameter set per universe):
+early pump, first green candle after a red run, first pullback (impulse → dip that holds 38.2% → bounce),
+volume increase (1m relative-volume z-score confirmed on 5m), buyer increase (buys/min growth with a
+rising buy ratio), buy/sell pressure, breakout above the lookback high with volume, pump exhaustion
+(bearish), migration breakout (above the post-migration high), sudden dump warning (bearish).
+Momentum is weighted by liquidity, and the 5m candle confirms or contradicts.
+
+**Score 0-100** = pattern (≤35) + flow (volume 12, buyers 10, pressure 13) + quality (safety score,
+5m confirmation, liquidity) − bearish (exhaustion, dump). **80-100 Strong Watch, 65-79 Watch,
+50-64 Weak, <50 Reject; a critical safety flag is always REJECT.** Alert types: `BUY_WATCH`, `SELL`
+(SL / TP / dump / exhaustion / time stop of an approved watch), `HOLD` (every 10 min), `REJECT`.
+
+**Strategies** (`shadow/strategies.py`): `early_entry` (new only), `first_pullback` (all), `migration_breakout`
+(all), each with entry / SL / TP / time stop per universe. Parameters live in the `strategy_params` table
+(version, active, source, parent version); version 1 is seeded from the defaults, phase 6 adds learned
+versions with `new_version()` and can `rollback()`. Every signal stores its `params_version`.
+
+**Judge agent** (`shadow/judge.py`, rule-based, free, no LLM) reviews every BUY WATCH with the signal,
+safety report, market features, open watches, strategy health and its own past accuracy:
+hard vetoes = safety not PASS, no/stale sell quote, sell impact > 3% or round-trip loss > 10%, liquidity
+below $8k (new) / $75k (mcap, volume), late entry after an extended move, conflicting dump or exhaustion,
+5 approved watches open, same creator or symbol already open, too many same-strategy watches, a
+strategy in drawdown (10+ closed, ≥20 points down or 5 losses in a row). Soft reasons (weak flow, thin
+score margin, no 5m confirmation, few candles, judge doing worse than chance) lower the confidence;
+APPROVE needs no hard veto and confidence ≥ 0.60. Every verdict goes to `judge_verdicts` with its inputs.
+Approved **and vetoed** watches are followed virtually until SL / TP / time stop, so phase 6 can compare
+approved vs vetoed outcomes. Vetoed watches are tracked silently (no SELL alert).
+
+The safety checker now quotes Jupiter only for coins near a real signal (a strategy setup scoring ≥
+`QUOTE_NEAR_SCORE`), checks signal candidates first, and skips RugCheck for 30 min when it cannot build
+a report (common for big coins).
+
+**11-minute live test (13 Nov 2026, 09:50–10:01 PKT, `--debug signals 660 quiet`, all real):**
+new launches reached the 200 cap; MCAP 13 members (UODF $265M … DESSA $5.7M), TOP VOLUME 19 members
+(USPR, mihao, FOOD, Max, CATE, STONK, GTA6, SHARKBUX …), 40 list entries filtered (36 not memes, 4 majors).
+6,073 evaluations (new 5,253, mcap 533, volume 287). Signals: **51, all from new launches** —
+3 BUY_WATCH (early_entry, class WATCH) and 48 REJECT (29 critical safety, the rest score < 65).
+**Judge: 2 APPROVE, 1 VETO** (low confidence: score 67 with only 2 candles and no 5m confirmation).
+**No MCAP or TOP VOLUME signal appeared** in 11 minutes: these coins start with no local candle
+history, and no first-pullback / migration setup formed in the window. No watch closed yet, so there
+are no outcomes to report. API calls/min: DexScreener 30.6, RugCheck 29.3, GeckoTerminal 4.8,
+Jupiter 4.5, RPC 4.0; **zero 429s**; 1 error (a RugCheck read timeout). CPU 1.0% average, RSS 54 MB,
+SQLite 3.9 MB after 11 minutes.
 
 ## Doctor (self-check)
 
@@ -229,7 +311,7 @@ and Birdeye needs a key, so neither is required.
 ## Project layout
 
 ```
-main.py                 entry point (bot from phase 8; --debug doctor / scan / collect / safety now)
+main.py                 entry point (bot from phase 8; --debug doctor / scan / collect / safety / signals now)
 shadow/__init__.py      version + PAPER_ONLY constant
 shadow/config.py        .env loading, safe defaults, paper-only guard
 shadow/doctor.py        self-check
@@ -244,14 +326,20 @@ shadow/candles.py       1-minute candle builder + GeckoTerminal OHLCV parser
 shadow/collect_cli.py   `--debug collect` live printer
 shadow/safety.py        phase 4: SafetyChecker, SafetyReport, strict rules
 shadow/safety_cli.py    `--debug safety` / `safety-live` printers
-shadow/signals.py       phase 5 stub
-shadow/strategies.py    phase 5 stub    shadow/paper.py      phase 6 stub
-shadow/db.py            SQLite schema v3: seen_tokens, token_market, price_snapshots, candles_1m, drops,
-                        safety_reports, rugcheck_cache, creator_blacklist, universe_members
-                        (+ `universe` column: new / mcap / volume)
+shadow/universes.py     phase 5: MCAP / TOP VOLUME discovery, meme filter, ranking, 30 s snapshots
+shadow/signals.py       phase 5: features, 10 detectors, score, SignalEngine (BUY_WATCH/SELL/HOLD/REJECT)
+shadow/strategies.py    phase 5: 3 strategies, versioned params (strategy_params)
+shadow/judge.py         phase 5: rule-based judge agent (APPROVE / VETO + reasons)
+shadow/signals_cli.py   `--debug signals` live printer
+shadow/paper.py         phase 6 stub
+shadow/db.py            SQLite schema v4: seen_tokens, token_market, price_snapshots, candles_1m, drops,
+                        safety_reports, rugcheck_cache, creator_blacklist, universe_members, universe_runs,
+                        signals, judge_verdicts, strategy_params (+ `universe` column: new / mcap / volume)
 shadow/telegram_bot.py  phase 8 stub
 shadow/dashboard.py     phase 9 stub
-tests/                  pytest (config, doctor, scanner, collector, safety; recorded responses in tests/fixtures/)
+tests/                  pytest (config, doctor, scanner, collector, safety, universes, signals, strategies, judge;
+                        recorded responses + real candles in tests/fixtures/)
+tools/                  record_candles_fixture.py (rebuilds the real-candle fixture)
 docs/DATA_SOURCES.md    tested data sources
 setup_termux.sh  start.sh  .env.example  requirements.txt  requirements-dev.txt
 ```

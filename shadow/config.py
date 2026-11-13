@@ -143,6 +143,39 @@ class Settings:
     safety_max_sell_loss_pct: float = 25.0  # quote value of selling the paper size lost more than this = critical
     safety_require_rugcheck: bool = True    # no RugCheck report -> UNKNOWN (never tradable), not PASS
 
+    # Universes (phase 5): MCAP >= $1M and TOP VOLUME coins, beside the new-launch tracking
+    universes_enabled: bool = True
+    universe_mcap_min: float = 1_000_000.0
+    universe_mcap_min_liq: float = 25_000.0
+    universe_mcap_max: int = 100          # tracked MCAP coins (most 24h volume first)
+    universe_volume_top_n: int = 30       # top N by 24h volume + top N by 1h volume
+    universe_volume_max: int = 50
+    universe_volume_min_liq: float = 20_000.0
+    universe_volume_min_mcap: float = 100_000.0
+    universe_volume_min_vol_h24: float = 300_000.0   # a "top volume" coin needs real volume, not just a rank
+    universe_volume_min_vol_h1: float = 25_000.0
+    universe_refresh_sec: int = 30        # snapshot of tracked universe coins (DexScreener batches)
+    universe_discover_sec: int = 300      # GeckoTerminal trending/top pools + DexScreener boosts
+    universe_gt_pages: int = 1            # pages per GeckoTerminal list (20 pools each, 3 lists)
+    universe_max_candidates: int = 300
+    universe_allow_majors: bool = False   # JUP/RAY/BONK/WIF/PUMP... are not memes to trade unless allowed
+    universe_exclude_mints: str = ""      # extra mints to ignore, comma separated
+
+    # Signals (phase 5)
+    signal_eval_sec: int = 15
+    signal_cooldown_min: int = 10         # same coin + strategy re-signals at most this often
+    signal_hold_every_min: int = 10       # HOLD updates for an open watch
+    quote_near_score: int = 55            # a candidate this close to a signal gets a Jupiter quote
+
+    # Judge agent (phase 5): rule-based reviewer of every BUY WATCH
+    judge_min_confidence: float = 0.60
+    judge_max_impact_pct: float = 3.0
+    judge_max_sell_loss_pct: float = 10.0
+    judge_min_liq_new: float = 8_000.0
+    judge_min_liq_large: float = 75_000.0
+    judge_max_correlated: int = 2
+    judge_max_strategy_dd_pct: float = 20.0
+
     # Paper trading (phase 6). Money values are virtual USD.
     paper_start_balance: float = 100.0
     paper_trade_size: float = 2.0
@@ -243,6 +276,33 @@ def load_settings(env_file: str | Path | None = None, env: dict | None = None) -
         safety_max_impact_danger_pct=_num(env, "SAFETY_MAX_IMPACT_DANGER_PCT", 5.0, float, w, 0.1, 100),
         safety_max_sell_loss_pct=_num(env, "SAFETY_MAX_SELL_LOSS_PCT", 25.0, float, w, 1, 100),
         safety_require_rugcheck=_str(env, "SAFETY_REQUIRE_RUGCHECK", "true").lower() in ("1", "true", "yes", "on"),
+        universes_enabled=_str(env, "UNIVERSES_ENABLED", "true").lower() in ("1", "true", "yes", "on"),
+        universe_mcap_min=_num(env, "UNIVERSE_MCAP_MIN", 1_000_000.0, float, w, 10_000, 1e12),
+        universe_mcap_min_liq=_num(env, "UNIVERSE_MCAP_MIN_LIQ", 25_000.0, float, w, 0, 1e10),
+        universe_mcap_max=_num(env, "UNIVERSE_MCAP_MAX", 100, int, w, 0, 300),
+        universe_volume_top_n=_num(env, "UNIVERSE_VOLUME_TOP_N", 30, int, w, 1, 200),
+        universe_volume_max=_num(env, "UNIVERSE_VOLUME_MAX", 50, int, w, 0, 300),
+        universe_volume_min_liq=_num(env, "UNIVERSE_VOLUME_MIN_LIQ", 20_000.0, float, w, 0, 1e10),
+        universe_volume_min_mcap=_num(env, "UNIVERSE_VOLUME_MIN_MCAP", 100_000.0, float, w, 0, 1e12),
+        universe_volume_min_vol_h24=_num(env, "UNIVERSE_VOLUME_MIN_VOL_H24", 300_000.0, float, w, 0, 1e12),
+        universe_volume_min_vol_h1=_num(env, "UNIVERSE_VOLUME_MIN_VOL_H1", 25_000.0, float, w, 0, 1e12),
+        universe_refresh_sec=_num(env, "UNIVERSE_REFRESH_SEC", 30, int, w, 10, 3600),
+        universe_discover_sec=_num(env, "UNIVERSE_DISCOVER_SEC", 300, int, w, 60, 86400),
+        universe_gt_pages=_num(env, "UNIVERSE_GT_PAGES", 1, int, w, 1, 10),
+        universe_max_candidates=_num(env, "UNIVERSE_MAX_CANDIDATES", 300, int, w, 10, 3000),
+        universe_allow_majors=_str(env, "UNIVERSE_ALLOW_MAJORS", "false").lower() in ("1", "true", "yes", "on"),
+        universe_exclude_mints=_str(env, "UNIVERSE_EXCLUDE_MINTS", ""),
+        signal_eval_sec=_num(env, "SIGNAL_EVAL_SEC", 15, int, w, 5, 600),
+        signal_cooldown_min=_num(env, "SIGNAL_COOLDOWN_MIN", 10, int, w, 1, 1440),
+        signal_hold_every_min=_num(env, "SIGNAL_HOLD_EVERY_MIN", 10, int, w, 1, 1440),
+        quote_near_score=_num(env, "QUOTE_NEAR_SCORE", 55, int, w, 0, 100),
+        judge_min_confidence=_num(env, "JUDGE_MIN_CONFIDENCE", 0.60, float, w, 0, 1),
+        judge_max_impact_pct=_num(env, "JUDGE_MAX_IMPACT_PCT", 3.0, float, w, 0.1, 100),
+        judge_max_sell_loss_pct=_num(env, "JUDGE_MAX_SELL_LOSS_PCT", 10.0, float, w, 0.1, 100),
+        judge_min_liq_new=_num(env, "JUDGE_MIN_LIQ_NEW", 8_000.0, float, w, 0, 1e10),
+        judge_min_liq_large=_num(env, "JUDGE_MIN_LIQ_LARGE", 75_000.0, float, w, 0, 1e10),
+        judge_max_correlated=_num(env, "JUDGE_MAX_CORRELATED", 2, int, w, 0, 50),
+        judge_max_strategy_dd_pct=_num(env, "JUDGE_MAX_STRATEGY_DD_PCT", 20.0, float, w, 1, 100),
         paper_start_balance=_num(env, "PAPER_START_BALANCE", 100.0, float, w, 1, 1e9),
         paper_trade_size=_num(env, "PAPER_TRADE_SIZE", 2.0, float, w, 0.01, 1e6),
         paper_buy_fee=_num(env, "PAPER_BUY_FEE", 0.50, float, w, 0, 1e6),

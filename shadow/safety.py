@@ -524,6 +524,9 @@ class SafetyChecker:
         self._mint_info: dict[str, tuple[float, dict | None]] = {}
         self._quotes: dict[str, tuple[float, dict]] = {}
         self.quote_queue: deque[str] = deque()
+        self.priority: set[str] = set()              # signal candidates waiting for a safety check
+        self.near_fn = None                          # set by the signal engine (phase 5): real signal proximity
+        self._rc_missing: dict[str, float] = {}      # RugCheck could not build a report (negative cache)
         self._quote_tried: dict[str, float] = {}   # last attempt (also failed/no-price ones)
         self.stats: Counter = Counter()
         self.reject_reasons: Counter = Counter()
@@ -539,12 +542,23 @@ class SafetyChecker:
                 r = self.reports[mint] = SafetyReport.from_row(row)
         return r
 
-    def request_quote(self, mint: str) -> None:
+    def request_quote(self, mint: str, priority: bool = False) -> None:
         tried = self._quote_tried.get(mint)
-        if tried and self.clock() - tried < self.s.safety_quote_ttl_sec:
+        if tried and self.clock() - tried < (60 if priority else self.s.safety_quote_ttl_sec):
             return
-        if mint not in self.quote_queue:
+        if mint in self.quote_queue:
+            if priority:
+                self.quote_queue.remove(mint)
+                self.quote_queue.appendleft(mint)
+            return
+        if priority:
+            self.quote_queue.appendleft(mint)
+        else:
             self.quote_queue.append(mint)
+
+    def prioritize(self, mint: str) -> None:
+        """A signal candidate needs its safety report now: checked before everything else."""
+        self.priority.add(mint)
 
     async def check(self, mint: str, *, quote: bool = False, force: bool = False,
                     market: MarketData | None = None) -> SafetyReport:
@@ -630,6 +644,10 @@ class SafetyChecker:
             if row and self.clock() - row[0] <= self.s.safety_ttl_sec:
                 self.stats["rc_cache_hits"] += 1
                 return json.loads(row[1]), row[0]
+        miss = self._rc_missing.get(mint)
+        if miss and not force and self.clock() - miss < self.s.safety_reject_ttl_sec:
+            self.stats["rc_skipped_missing"] += 1
+            return None, None
         await self.rc_pace.acquire()
         headers = {"X-API-KEY": self.s.rugcheck_api_key} if self.s.rugcheck_api_key else None
         try:
@@ -646,6 +664,8 @@ class SafetyChecker:
             return None, None
         if status != 200 or not isinstance(body, dict) or not body.get("mint"):
             self.stats["rc_missing"] += 1
+            if 400 <= status < 500:
+                self._rc_missing[mint] = self.clock()   # e.g. "unable to generate report": retry after 30 min
             if status >= 500:
                 self._err(f"rugcheck HTTP {status}")
             return None, None
@@ -767,7 +787,10 @@ class SafetyChecker:
     def due_mints(self, mints: list[str], markets: dict[str, MarketData], limit: int) -> list[str]:
         now = self.clock()
         new, stale = [], []
+        first = [m for m in mints if m in self.priority]
         for m in mints:
+            if m in self.priority:
+                continue
             r = self.get_report(m)
             if r is None:
                 new.append(m)
@@ -776,12 +799,17 @@ class SafetyChecker:
         key = lambda m: (markets[m].vol_m5 if markets.get(m) else 0.0)  # noqa: E731
         new.sort(key=key, reverse=True)
         stale.sort(key=key, reverse=True)
-        return (new + stale)[:limit]
+        return (first + new + stale)[:limit]
 
-    def near_signal(self, md: MarketData | None, rep: SafetyReport | None) -> bool:
-        """Placeholder until phase 5 provides real signal proximity: active, buy-heavy tokens that passed."""
-        return bool(md and rep and rep.passed and md.vol_m5 >= self.s.safety_quote_min_vol5m
-                    and (md.buys_m5 or 0) > (md.sells_m5 or 0))
+    def near_signal(self, md: MarketData | None, rep: SafetyReport | None, mint: str | None = None) -> bool:
+        """Quote only tokens near a signal. With the phase-5 engine attached this is its real proximity
+        (a strategy setup with score >= QUOTE_NEAR_SCORE); standalone it falls back to active, buy-heavy
+        tokens that passed (used by --debug safety-live)."""
+        if not (rep and rep.passed):
+            return False
+        if self.near_fn is not None:
+            return self.near_fn(mint or rep.mint, md, rep)
+        return bool(md and md.vol_m5 >= self.s.safety_quote_min_vol5m and (md.buys_m5 or 0) > (md.sells_m5 or 0))
 
     async def _check_loop(self, collector) -> None:
         while not self._stop.is_set():
@@ -799,6 +827,7 @@ class SafetyChecker:
                 try:
                     rc, rc_ts = await self.rugcheck(m)
                     rep = self._evaluate_and_save(m, rc=rc, rc_ts=rc_ts, market=markets.get(m))
+                    self.priority.discard(m)
                     if self.on_report:
                         self.on_report(rep, markets.get(m))
                     if not rep.critical and self.near_signal(markets.get(m), rep) \

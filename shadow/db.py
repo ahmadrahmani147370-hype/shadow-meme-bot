@@ -101,6 +101,48 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX IF NOT EXISTS idx_universe_last ON universe_members(universe, last_ts);
     """,
+    # v4 (phase 5): signals, judge verdicts, versioned strategy parameters, universe bookkeeping
+    """
+    -- pre-release v3 databases may lack universe_members
+    CREATE TABLE IF NOT EXISTS universe_members (
+        mint TEXT NOT NULL, universe TEXT NOT NULL, first_ts REAL NOT NULL, last_ts REAL NOT NULL,
+        rank INTEGER, metric REAL, source TEXT, PRIMARY KEY (mint, universe)
+    );
+    CREATE INDEX IF NOT EXISTS idx_universe_last ON universe_members(universe, last_ts);
+    CREATE TABLE IF NOT EXISTS signals (
+        id INTEGER PRIMARY KEY, ts REAL NOT NULL, mint TEXT NOT NULL, symbol TEXT, universe TEXT NOT NULL,
+        strategy TEXT, alert_type TEXT NOT NULL, score REAL, class TEXT, params_version INTEGER,
+        price REAL, mcap REAL, liquidity REAL, entry REAL, sl REAL, tp REAL, time_stop_min REAL,
+        detectors_json TEXT, features_json TEXT, safety_verdict TEXT, safety_score INTEGER, critical_json TEXT,
+        judge_verdict TEXT, judge_confidence REAL, parent_id INTEGER, reason TEXT,
+        status TEXT, exit_ts REAL, exit_price REAL, exit_reason TEXT, pnl_pct REAL, max_up_pct REAL, max_down_pct REAL
+    );
+    CREATE INDEX IF NOT EXISTS idx_signals_mint ON signals(mint, ts);
+    CREATE INDEX IF NOT EXISTS idx_signals_strategy ON signals(strategy, ts);
+    CREATE INDEX IF NOT EXISTS idx_signals_status ON signals(status);
+    CREATE TABLE IF NOT EXISTS judge_verdicts (
+        id INTEGER PRIMARY KEY, signal_id INTEGER NOT NULL, ts REAL NOT NULL, mint TEXT NOT NULL, universe TEXT,
+        strategy TEXT, verdict TEXT NOT NULL, confidence REAL, reasons_json TEXT, inputs_json TEXT,
+        judge_version TEXT, outcome TEXT, outcome_pnl_pct REAL, outcome_ts REAL
+    );
+    CREATE INDEX IF NOT EXISTS idx_judge_signal ON judge_verdicts(signal_id);
+    CREATE INDEX IF NOT EXISTS idx_judge_ts ON judge_verdicts(ts);
+    CREATE TABLE IF NOT EXISTS strategy_params (
+        strategy TEXT NOT NULL, version INTEGER NOT NULL, created_ts REAL NOT NULL, active INTEGER NOT NULL DEFAULT 0,
+        source TEXT NOT NULL, parent_version INTEGER, universes_json TEXT NOT NULL, params_json TEXT NOT NULL,
+        note TEXT, PRIMARY KEY (strategy, version)
+    );
+    ALTER TABLE universe_members ADD COLUMN active INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE universe_members ADD COLUMN rank_h1 INTEGER;
+    ALTER TABLE universe_members ADD COLUMN mcap REAL;
+    ALTER TABLE universe_members ADD COLUMN vol_h24 REAL;
+    ALTER TABLE universe_members ADD COLUMN vol_h1 REAL;
+    ALTER TABLE universe_members ADD COLUMN liquidity_usd REAL;
+    CREATE TABLE IF NOT EXISTS universe_runs (
+        id INTEGER PRIMARY KEY, ts REAL NOT NULL, candidates INTEGER, mcap_members INTEGER, volume_members INTEGER,
+        filtered_json TEXT, calls INTEGER
+    );
+    """,
 ]
 
 MARKET_COLS = ("mint", "symbol", "name", "pair_address", "dex_id", "quote_symbol", "price_usd", "price_native",
@@ -110,6 +152,15 @@ MARKET_COLS = ("mint", "symbol", "name", "pair_address", "dex_id", "quote_symbol
                "n_pairs", "source", "updated_ts", "universe")
 
 SCHEMA_VERSION = len(MIGRATIONS)
+
+
+def _market_sets() -> str:
+    """ON CONFLICT update. The universe is never downgraded to 'new' by the new-launch collector:
+    a refresh with universe='new' keeps whatever universe the row already has (the overwrite fix);
+    the universe collector (mcap/volume) sets its own value."""
+    parts = [f"{c}=excluded.{c}" for c in MARKET_COLS if c not in ("mint", "universe")]
+    parts.append("universe=CASE WHEN excluded.universe='new' THEN token_market.universe ELSE excluded.universe END")
+    return ", ".join(parts)
 
 
 class Database:
@@ -131,9 +182,13 @@ class Database:
     def migrate(self) -> int:
         v = self.version
         for i in range(v, SCHEMA_VERSION):
-            with self.con:
-                self.con.executescript(MIGRATIONS[i])
-                self.con.execute(f"PRAGMA user_version = {i + 1}")
+            # one transaction per step: a failing step leaves the database untouched at the old version
+            try:
+                self.con.executescript(f"BEGIN;\n{MIGRATIONS[i]}\nPRAGMA user_version = {i + 1};\nCOMMIT;")
+            except Exception:
+                if self.con.in_transaction:
+                    self.con.execute("ROLLBACK")
+                raise
         return self.version
 
     def close(self) -> None:
@@ -207,7 +262,7 @@ class Database:
     def upsert_market(self, m: MarketData, tracking: bool | None = None) -> None:
         d = asdict(m)
         vals = [d[c] for c in MARKET_COLS]
-        sets = ", ".join(f"{c}=excluded.{c}" for c in MARKET_COLS if c != "mint")
+        sets = _market_sets()
         track_sql = "" if tracking is None else f", tracking={1 if tracking else 0}"
         with self.con:
             self.con.execute(
@@ -220,7 +275,7 @@ class Database:
         """Many rows in one transaction (200 tracked tokens every 15 s on a phone)."""
         if not ms:
             return
-        sets = ", ".join(f"{c}=excluded.{c}" for c in MARKET_COLS if c != "mint")
+        sets = _market_sets()
         track_sql = "" if tracking is None else f", tracking={1 if tracking else 0}"
         rows = []
         for m in ms:
@@ -297,6 +352,10 @@ class Database:
                 "DELETE FROM safety_reports WHERE checked_ts < ? AND mint NOT IN "
                 "(SELECT mint FROM token_market WHERE tracking=1)", (now - snapshot_retention_h * 3600,)).rowcount
             out["rc_cache"] = self.con.execute("DELETE FROM rugcheck_cache WHERE ts < ?", (now - 3600,)).rowcount
+            out["signals"] = self.con.execute("DELETE FROM signals WHERE ts < ? AND COALESCE(status, '') != 'open'",
+                                              (now - 30 * 86400,)).rowcount
+            self.con.execute("DELETE FROM judge_verdicts WHERE ts < ?", (now - 30 * 86400,))
+            self.con.execute("DELETE FROM universe_runs WHERE ts < ?", (now - 7 * 86400,))
             out["blacklist"] = self.con.execute("DELETE FROM creator_blacklist WHERE ts < ?",
                                                 (now - 30 * 86400,)).rowcount
             self.con.execute("UPDATE seen_tokens SET raw_json=NULL WHERE raw_json IS NOT NULL AND first_seen_ts < ?",
@@ -309,7 +368,8 @@ class Database:
     def table_counts(self) -> dict:
         return {t: self.con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
                 for t in ("seen_tokens", "token_market", "price_snapshots", "candles_1m", "collector_drops",
-                          "safety_reports", "rugcheck_cache", "creator_blacklist", "universe_members")}
+                          "safety_reports", "rugcheck_cache", "creator_blacklist", "universe_members", "signals",
+                          "judge_verdicts", "strategy_params", "universe_runs")}
 
     # ---------------------------------------------------------------- phase 4 tables
     def save_safety(self, row: dict) -> None:
@@ -353,21 +413,113 @@ class Database:
         return dict(r) if r else None
 
     def upsert_universe_member(self, mint: str, universe: str, rank: int | None = None, metric: float | None = None,
-                               source: str = "", now: float | None = None) -> None:
+                               source: str = "", now: float | None = None, rank_h1: int | None = None,
+                               mcap: float | None = None, vol_h24: float | None = None, vol_h1: float | None = None,
+                               liquidity_usd: float | None = None) -> None:
         now = now or time.time()
         with self.con:
             self.con.execute(
-                "INSERT INTO universe_members (mint, universe, first_ts, last_ts, rank, metric, source) VALUES "
-                "(?,?,?,?,?,?,?) ON CONFLICT(mint, universe) DO UPDATE SET last_ts=excluded.last_ts, "
-                "rank=excluded.rank, metric=excluded.metric, source=excluded.source",
-                (mint, universe, now, now, rank, metric, source))
+                "INSERT INTO universe_members (mint, universe, first_ts, last_ts, rank, metric, source, active, rank_h1,"
+                " mcap, vol_h24, vol_h1, liquidity_usd) VALUES (?,?,?,?,?,?,?,1,?,?,?,?,?) "
+                "ON CONFLICT(mint, universe) DO UPDATE SET last_ts=excluded.last_ts, rank=excluded.rank, "
+                "metric=excluded.metric, source=excluded.source, active=1, rank_h1=excluded.rank_h1, "
+                "mcap=excluded.mcap, vol_h24=excluded.vol_h24, vol_h1=excluded.vol_h1, liquidity_usd=excluded.liquidity_usd",
+                (mint, universe, now, now, rank, metric, source, rank_h1, mcap, vol_h24, vol_h1, liquidity_usd))
 
-    def universe_mints(self, universe: str, since_ts: float = 0) -> list[str]:
-        return [r[0] for r in self.con.execute(
-            "SELECT mint FROM universe_members WHERE universe=? AND last_ts>=? ORDER BY rank", (universe, since_ts))]
+    def deactivate_universe_members(self, universe: str, keep: set) -> int:
+        rows = [r[0] for r in self.con.execute("SELECT mint FROM universe_members WHERE universe=? AND active=1",
+                                               (universe,)) if r[0] not in keep]
+        with self.con:
+            self.con.executemany("UPDATE universe_members SET active=0 WHERE mint=? AND universe=?",
+                                 [(m, universe) for m in rows])
+        return len(rows)
 
-    def universes_of(self, mint: str) -> list[str]:
-        return [r[0] for r in self.con.execute("SELECT universe FROM universe_members WHERE mint=?", (mint,))]
+    def universe_mints(self, universe: str, since_ts: float = 0, active_only: bool = True) -> list[str]:
+        q = "SELECT mint FROM universe_members WHERE universe=? AND last_ts>=?" + (" AND active=1" if active_only else "")
+        return [r[0] for r in self.con.execute(q + " ORDER BY rank", (universe, since_ts))]
+
+    def universes_of(self, mint: str, active_only: bool = True) -> list[str]:
+        q = "SELECT universe FROM universe_members WHERE mint=?" + (" AND active=1" if active_only else "")
+        return [r[0] for r in self.con.execute(q, (mint,))]
+
+    def add_universe_run(self, row: dict) -> None:
+        with self.con:
+            self.con.execute("INSERT INTO universe_runs (ts, candidates, mcap_members, volume_members, filtered_json, calls)"
+                             " VALUES (?,?,?,?,?,?)", (row["ts"], row.get("candidates"), row.get("mcap_members"),
+                                                       row.get("volume_members"), json.dumps(row.get("filtered") or {}),
+                                                       row.get("calls")))
+
+    # ---------------------------------------------------------------- phase 5 tables
+    SIGNAL_COLS = ("ts", "mint", "symbol", "universe", "strategy", "alert_type", "score", "class", "params_version",
+                   "price", "mcap", "liquidity", "entry", "sl", "tp", "time_stop_min", "detectors_json", "features_json",
+                   "safety_verdict", "safety_score", "critical_json", "judge_verdict", "judge_confidence", "parent_id",
+                   "reason", "status")
+
+    def add_signal(self, row: dict) -> int:
+        with self.con:
+            cur = self.con.execute(f"INSERT INTO signals ({', '.join(self.SIGNAL_COLS)}) VALUES "
+                                   f"({', '.join('?' * len(self.SIGNAL_COLS))})", [row.get(c) for c in self.SIGNAL_COLS])
+        return cur.lastrowid
+
+    def update_signal(self, sid: int, **kw) -> None:
+        if kw:
+            with self.con:
+                self.con.execute(f"UPDATE signals SET {', '.join(f'{k}=?' for k in kw)} WHERE id=?", [*kw.values(), sid])
+
+    def get_signal(self, sid: int) -> dict | None:
+        r = self.con.execute("SELECT * FROM signals WHERE id=?", (sid,)).fetchone()
+        return dict(r) if r else None
+
+    def open_signals(self) -> list[dict]:
+        return [dict(r) for r in self.con.execute("SELECT * FROM signals WHERE status='open' ORDER BY ts")]
+
+    def closed_signals(self, strategy: str | None = None, since_ts: float = 0) -> list[dict]:
+        q, a = "SELECT * FROM signals WHERE status='closed' AND ts>=?", [since_ts]
+        if strategy:
+            q, a = q + " AND strategy=?", a + [strategy]
+        return [dict(r) for r in self.con.execute(q + " ORDER BY exit_ts", a)]
+
+    def add_judge_verdict(self, row: dict) -> int:
+        cols = ("signal_id", "ts", "mint", "universe", "strategy", "verdict", "confidence", "reasons_json",
+                "inputs_json", "judge_version")
+        with self.con:
+            cur = self.con.execute(f"INSERT INTO judge_verdicts ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+                                   [row.get(c) for c in cols])
+        return cur.lastrowid
+
+    def set_judge_outcome(self, signal_id: int, outcome: str, pnl_pct: float | None, ts: float) -> None:
+        with self.con:
+            self.con.execute("UPDATE judge_verdicts SET outcome=?, outcome_pnl_pct=?, outcome_ts=? WHERE signal_id=?",
+                             (outcome, pnl_pct, ts, signal_id))
+
+    def judge_history(self, since_ts: float = 0) -> list[dict]:
+        return [dict(r) for r in self.con.execute(
+            "SELECT verdict, outcome, outcome_pnl_pct, strategy, universe FROM judge_verdicts WHERE ts>=? "
+            "AND outcome IS NOT NULL", (since_ts,))]
+
+    def save_strategy_params(self, strategy: str, version: int, params: dict, universes: list, source: str,
+                             parent_version: int | None = None, note: str = "", active: bool = True) -> None:
+        with self.con:
+            if active:
+                self.con.execute("UPDATE strategy_params SET active=0 WHERE strategy=?", (strategy,))
+            self.con.execute("INSERT OR REPLACE INTO strategy_params (strategy, version, created_ts, active, source, "
+                             "parent_version, universes_json, params_json, note) VALUES (?,?,?,?,?,?,?,?,?)",
+                             (strategy, version, time.time(), 1 if active else 0, source, parent_version,
+                              json.dumps(universes), json.dumps(params), note))
+
+    def active_strategy_params(self, strategy: str) -> dict | None:
+        r = self.con.execute("SELECT * FROM strategy_params WHERE strategy=? AND active=1 ORDER BY version DESC LIMIT 1",
+                             (strategy,)).fetchone()
+        if not r:
+            return None
+        d = dict(r)
+        d["params"], d["universes"] = json.loads(d.pop("params_json")), json.loads(d.pop("universes_json"))
+        return d
+
+    def strategy_param_versions(self, strategy: str) -> list[dict]:
+        return [dict(r) for r in self.con.execute(
+            "SELECT strategy, version, created_ts, active, source, parent_version, note FROM strategy_params "
+            "WHERE strategy=? ORDER BY version", (strategy,))]
 
     def snapshot_extremes(self, mint: str) -> dict | None:
         """First/peak/latest price and liquidity from retained snapshots (rug-pull warning)."""
