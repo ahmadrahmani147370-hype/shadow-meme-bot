@@ -36,12 +36,16 @@ IMPLEMENTED = True
 log = logging.getLogger("shadow.universes")
 
 GT_BASE = "https://api.geckoterminal.com/api/v2/networks/solana/"
-GT_LISTS = (("trending_pools", {}), ("pools", {"sort": "h24_volume_usd_desc"}), ("pools", {"sort": "h24_tx_count_desc"}))
+GT_LISTS = (("trending_pools", {}), ("pools", {"sort": "h24_volume_usd_desc"}), ("pools", {"sort": "h24_tx_count_desc"}),
+            # v1.2: more >= $1M discovery - trending over 1h and 6h as well
+            ("trending_pools", {"duration": "1h"}), ("trending_pools", {"duration": "6h"}))
+# v1.2: DexScreener latest boosts + latest profiles every run (were only used while behind the coin pace)
+DS_ALWAYS = ("https://api.dexscreener.com/token-boosts/latest/v1", "https://api.dexscreener.com/token-profiles/latest/v1")
 DS_BOOSTS_TOP = "https://api.dexscreener.com/token-boosts/top/v1"
 # v1.1.1 widened discovery (only while the daily coin minimum is behind pace)
 GT_WIDE_LISTS = (("new_pools", {}),)
 DS_WIDE = ("https://api.dexscreener.com/token-boosts/latest/v1", "https://api.dexscreener.com/token-profiles/latest/v1")
-WIDE_EXTRA_PAGES = 2
+WIDE_EXTRA_PAGES = 0      # v1.2: 3 pages per list by default already (GeckoTerminal 6 calls/min budget)
 
 # Not memes: SOL, stables, LSTs, wrapped assets, and "majors" (allowed with UNIVERSE_ALLOW_MAJORS=true)
 NON_MEME_MINTS = {
@@ -233,7 +237,7 @@ class UniverseCollector:
                         found.append(p["mint"])
         boosts = await self._get("dexscreener_profiles", DS_BOOSTS_TOP)
         found += parse_ds_boosts(boosts)
-        for url in (DS_WIDE if wide else ()):
+        for url in DS_ALWAYS + tuple(u for u in (DS_WIDE if wide else ()) if u not in DS_ALWAYS):
             found += parse_ds_boosts(await self._get("dexscreener_profiles", url))
         for m in found:
             self.candidates[m] = now

@@ -34,7 +34,7 @@ def test_v11_defaults():
     s = S()
     assert s.trade_min_mcap_usd == 1e6 and s.eval_min_mcap_usd == 750_000 and s.coins_per_day == 1000
     assert s.tg_notify == "trades" and s.fast_refresh_sec == 1.0 and s.fast_max_mints == 30
-    assert s.trade_min_liq_usd == 50_000 and s.trade_min_liq_mcap == 0.02 and s.trade_min_age_min == 10
+    assert s.trade_min_liq_usd == 50_000 and s.trade_min_liq_mcap == 0.015 and s.trade_min_age_min == 10
     assert s.learn_min_trades == 12 and s.learn_shrink_k == 20 and s.shadow_track
     assert S(coins_per_day=0).coins_per_day == 0 and S(telegram_notify="ALL").tg_notify == "all"
     assert S(trade_min_mcap_usd=2_000_000).trade_min_mcap_usd == 2e6

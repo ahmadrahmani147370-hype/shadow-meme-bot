@@ -76,12 +76,12 @@ def test_each_hard_veto(code, mod):
 def test_large_coin_needs_more_liquidity_and_less_extension():
     def mcap(s, r, m, e, c):
         s["universe"] = e.universe = "mcap"
-        e.features.update(liquidity=60000)
+        e.features.update(liquidity=45000)                     # v1.2: large-coin floor $50k
     assert "thin_liquidity" in review(m=mcap).hard_codes()
 
     def mcap_late(s, r, m, e, c):
         s["universe"] = e.universe = "mcap"
-        e.features.update(liquidity=200000, ret_15m=18.0)
+        e.features.update(liquidity=200000, ret_15m=35.0)     # v1.2: mcap late-entry limit 30% / 15m
     assert "late_entry" in review(m=mcap_late).hard_codes()
 
 

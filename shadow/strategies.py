@@ -37,33 +37,33 @@ DEFAULT_PARAMS: dict[str, dict] = {
     "first_pullback": {
         "universes": [U_NEW, U_MCAP, U_VOLUME],
         "params": {
-            U_NEW: {"min_score": 65, "sl_below_low_pct": 3.0, "sl_pct": 20.0, "max_sl_pct": 20.0, "tp_pct": 1000.0, "time_stop_min": 45,
+            U_NEW: {"min_score": 50, "sl_below_low_pct": 3.0, "sl_pct": 20.0, "max_sl_pct": 20.0, "tp_pct": 1000.0, "time_stop_min": 45,
                     "trail_pct": 8.0, "trail_activate_pct": 12.0},
-            U_MCAP: {"min_score": 65, "sl_below_low_pct": 1.5, "sl_pct": 20.0, "max_sl_pct": 20.0, "tp_pct": 1000.0, "time_stop_min": 120,
+            U_MCAP: {"min_score": 50, "sl_below_low_pct": 1.5, "sl_pct": 20.0, "max_sl_pct": 20.0, "tp_pct": 1000.0, "time_stop_min": 120,
                      "trail_pct": 3.0, "trail_activate_pct": 5.0},
-            U_VOLUME: {"min_score": 65, "sl_below_low_pct": 2.0, "sl_pct": 20.0, "max_sl_pct": 20.0, "tp_pct": 1000.0, "time_stop_min": 90,
+            U_VOLUME: {"min_score": 50, "sl_below_low_pct": 2.0, "sl_pct": 20.0, "max_sl_pct": 20.0, "tp_pct": 1000.0, "time_stop_min": 90,
                        "trail_pct": 4.0, "trail_activate_pct": 7.0},
         },
     },
     "migration_breakout": {
         "universes": [U_NEW, U_MCAP, U_VOLUME],
         "params": {
-            U_NEW: {"min_score": 65, "max_since_migration_min": 60, "sl_pct": 20.0, "tp_pct": 1000.0, "time_stop_min": 30,
+            U_NEW: {"min_score": 50, "max_since_migration_min": 60, "sl_pct": 20.0, "tp_pct": 1000.0, "time_stop_min": 30,
                     "trail_pct": 10.0, "trail_activate_pct": 15.0},
-            U_MCAP: {"min_score": 65, "max_since_migration_min": 120, "sl_pct": 20.0, "tp_pct": 1000.0, "time_stop_min": 60,
+            U_MCAP: {"min_score": 50, "max_since_migration_min": 120, "sl_pct": 20.0, "tp_pct": 1000.0, "time_stop_min": 60,
                      "trail_pct": 4.0, "trail_activate_pct": 8.0},
-            U_VOLUME: {"min_score": 65, "max_since_migration_min": 120, "sl_pct": 20.0, "tp_pct": 1000.0, "time_stop_min": 45,
+            U_VOLUME: {"min_score": 50, "max_since_migration_min": 120, "sl_pct": 20.0, "tp_pct": 1000.0, "time_stop_min": 45,
                        "trail_pct": 6.0, "trail_activate_pct": 10.0},
         },
     },
     "momentum_breakout": {
         "universes": [U_NEW, U_MCAP, U_VOLUME],
         "params": {
-            U_NEW: {"min_score": 60, "sl_pct": 20.0, "tp_pct": 1000.0, "time_stop_min": 45,
+            U_NEW: {"min_score": 50, "sl_pct": 20.0, "tp_pct": 1000.0, "time_stop_min": 45,
                     "trail_pct": 4.0, "trail_activate_pct": 7.0},
             U_MCAP: {"min_score": 50, "sl_pct": 20.0, "tp_pct": 1000.0, "time_stop_min": 120,
                      "trail_pct": 3.0, "trail_activate_pct": 5.0},
-            U_VOLUME: {"min_score": 55, "sl_pct": 20.0, "tp_pct": 1000.0, "time_stop_min": 90,
+            U_VOLUME: {"min_score": 50, "sl_pct": 20.0, "tp_pct": 1000.0, "time_stop_min": 90,
                        "trail_pct": 3.5, "trail_activate_pct": 6.0},
         },
     },
@@ -234,12 +234,55 @@ def migrate_v113(db: Database, sl_pct: float = 20.0) -> list[str]:
     return done
 
 
+V120_MIN_SCORE = 50.0
+V120_JUDGE = {"min_confidence": 0.35, "min_liq_large": 50_000.0}
+
+
+def migrate_v120(db: Database) -> list[str]:
+    """One-time (v1.2.0, Ahmed: "trades start karo"): 0 paper trades since the v1.1 >= $1M rule. min_score of
+    first_pullback / migration_breakout / momentum_breakout lowered to 50 (9 >= $1M setups scored 51-59 against
+    60-65), and a new judge version with min_confidence 0.35 / min_liq_large $50k. early_entry keeps 70. Learned
+    values already lower are kept; all other params kept. Recorded in strategy_updates."""
+    if db.meta_get("migrated_v120") == "1":
+        return []
+    done = []
+    for name in ("first_pullback", "migration_breakout", "momentum_breakout"):
+        cur = db.active_strategy_params(name)
+        if cur is None:
+            continue
+        params = copy.deepcopy(cur["params"])
+        changes = {}
+        for u, ps in params.items():
+            if ps.get("min_score", 0) > V120_MIN_SCORE:
+                changes[f"{u}.min_score"] = [ps["min_score"], V120_MIN_SCORE]
+                ps["min_score"] = V120_MIN_SCORE
+        if changes:
+            v = new_version(db, name, params, "v1.2.0", note="min_score 50 for >= $1M setups")
+            db.add_strategy_update("param_change", name, cur["version"], v, changes,
+                                   "v1.2.0: min_score lowered to 50 - no >= $1M setup reached 60-65", {})
+            done.append(name)
+    cur = db.active_strategy_params("judge")
+    if cur is not None:
+        params = dict(cur["params"])
+        changes = {f"judge.{k}": [params.get(k), v] for k, v in V120_JUDGE.items() if params.get(k) != v}
+        if changes:
+            params.update(V120_JUDGE)
+            v = new_version(db, "judge", params, "v1.2.0", note="judge loosened for >= $1M setups")
+            db.add_strategy_update("param_change", "judge", cur["version"], v, changes,
+                                   "v1.2.0: judge min confidence 0.60 -> 0.35 (margin-based confidence), large-coin "
+                                   "liquidity floor $75k -> $50k - the judge had vetoed every >= $1M setup", {})
+            done.append("judge")
+    db.meta_set("migrated_v120", "1")
+    return done
+
+
 def load_strategies(db: Database) -> dict[str, Strategy]:
     ensure_defaults(db)
     try:
         migrate_v11(db)
         migrate_v112(db)
         migrate_v113(db)
+        migrate_v120(db)
     except Exception:  # noqa: BLE001  read-only views (reports/export) must still load strategies
         pass
     out = {}
@@ -272,5 +315,5 @@ def rollback(db: Database, name: str, version: int) -> None:
         db.con.execute("UPDATE strategy_params SET active=1 WHERE strategy=? AND version=?", (name, version))
 
 
-__all__ = ["Strategy", "DEFAULT_PARAMS", "STRATEGIES", "ensure_defaults", "load_strategies", "migrate_v11", "migrate_v112", "migrate_v113",
+__all__ = ["Strategy", "DEFAULT_PARAMS", "STRATEGIES", "ensure_defaults", "load_strategies", "migrate_v11", "migrate_v112", "migrate_v113", "migrate_v120",
            "new_version", "rollback"]

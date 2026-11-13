@@ -297,7 +297,41 @@ def build_insights(db: Database, s: Settings, account: dict, positions: list, no
         ev.append({"ts": round(r[0]), "kind": "KILL", "symbol": _s(r[1], MAX_SYMBOL), "mint": r[2], "universe": r[3],
                    "reason": _s("signal: " + (r[4] or "rejected"), 100), "pnl_usd": None, "pnl_pct": None})
     ev.sort(key=lambda e: -e["ts"])
-    return {"totals": totals, "reject_reasons": reasons, "universes": unis, "today": today, "events": ev[:MAX_EVENTS]}
+    return {"totals": totals, "reject_reasons": reasons, "universes": unis, "today": today, "events": ev[:MAX_EVENTS],
+            "hourly": hourly_series(db, now), "perf": perf_stats(db)}
+
+
+HOURS = 12
+
+
+def hourly_series(db: Database, now: float, hours: int = HOURS) -> dict:
+    """v1.2 dashboard mini bar charts - real counts per clock hour, oldest first, the last bucket = this hour so
+    far: unique tokens checked / rejected by the rug filter (dash_counted, 2 days kept) and paper trades opened."""
+    con = db.con
+    start = (int(now) // 3600 - (hours - 1)) * 3600
+    rugs, checked, trades = [0] * hours, [0] * hours, [0] * hours
+    try:
+        for ts, rej in con.execute("SELECT ts, rejected FROM dash_counted WHERE ts>=?", (start,)):
+            i = int((ts - start) // 3600)
+            if 0 <= i < hours:
+                checked[i] += 1
+                rugs[i] += 1 if rej else 0
+    except Exception:  # noqa: BLE001  table created on the first counter update
+        pass
+    for (ts,) in con.execute("SELECT open_ts FROM paper_positions WHERE open_ts>=?", (start,)):
+        i = int((ts - start) // 3600)
+        if 0 <= i < hours:
+            trades[i] += 1
+    return {"start": start, "step": 3600, "rugs": rugs, "checked": checked, "trades": trades}
+
+
+def perf_stats(db: Database) -> dict:
+    """Closed paper trades of the current era: n, wins, losses, average P&L ($ and %)."""
+    n, w, avg_usd, avg_pct, tot = db.con.execute(
+        "SELECT COUNT(*), COALESCE(SUM(pnl_usd>0),0), AVG(pnl_usd), AVG(pnl_pct), COALESCE(SUM(pnl_usd),0) "
+        "FROM paper_positions WHERE status='closed'").fetchone()
+    return {"closed": n, "wins": w, "losses": n - w, "avg_pnl_usd": _r(avg_usd, 4), "avg_pnl_pct": _r(avg_pct, 2),
+            "pnl_usd": _r(tot, 4), "win_rate": _r(w / n, 4) if n else None}
 
 
 def _metrics(m: dict) -> dict:

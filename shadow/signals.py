@@ -338,6 +338,8 @@ class SignalEngine:
         self.paper = paper                              # phase 6 PaperEngine (opens trades on APPROVED watches)
         self.paths: dict[int, dict] = {}                # price path after each BUY WATCH (self-learning input)
         self.strategies: dict[str, Strategy] = load_strategies(db)
+        if judge is not None and hasattr(judge, "reload"):
+            judge.reload()                              # v1.2: pick up a judge version created by a migration
         self.policy = ExitPolicy.from_settings(settings)
         self.proximity: dict[str, tuple[float, float]] = {}
         self.last_signal: dict[tuple, float] = {}

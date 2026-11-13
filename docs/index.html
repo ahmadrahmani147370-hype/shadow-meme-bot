@@ -4,17 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<meta name="theme-color" content="#07071a">
+<meta name="theme-color" content="#041417">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://telegram.org; connect-src 'self' https://api.github.com https://raw.githubusercontent.com; img-src 'self' data:; style-src 'self'; frame-ancestors *">
 <title>SHADOW MEME - Paper Dashboard</title>
-<link rel="icon" href="logo.svg">
-<link rel="stylesheet" href="style.css?v=11.1">
+<link rel="icon" href="avatar.svg">
+<link rel="stylesheet" href="style.css?v=12.0">
 <script async src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
 <header id="top">
-  <div class="brand"><img class="logo" src="logo.svg" alt="" width="38" height="38">
-    <div class="bt"><div class="name">SHADOW MEME <span class="tick" title="Your own bot">✓</span></div><div class="sub" id="updated">loading…</div></div></div>
+  <div class="brand"><img class="logo" src="avatar.svg" alt="" width="42" height="42">
+    <div class="bt"><div class="name">SHADOW MEME <span class="tick" title="Your own bot"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1.8l2.6 1.9 3.2-.2 1 3 2.6 1.9-1 3.1 1 3.1-2.6 1.9-1 3-3.2-.2L12 22.2l-2.6-1.9-3.2.2-1-3-2.6-1.9 1-3.1-1-3.1 2.6-1.9 1-3 3.2.2z"/><path class="ck" d="M8 12.3l2.7 2.7L16.2 9.4"/></svg></span></div><div class="sub" id="updated">loading…</div></div></div>
   <div class="pills"><span class="pill" id="state">…</span><span class="pill paper">PAPER ONLY</span></div>
 </header>
 <main>
@@ -30,6 +30,10 @@
     <button type="button" role="tab" data-tab="trades">Trade Log</button>
     <button type="button" role="tab" data-tab="judge">Strategies/Judge</button>
     <button type="button" role="tab" data-tab="settings">Settings</button>
+  </div>
+  <div class="duo">
+    <section id="perf" class="card"><h2>Performance <small>(Paper)</small></h2><div class="body"></div></section>
+    <section id="health" class="card"><h2>Scanner Health</h2><div class="body"></div></section>
   </div>
   <div class="panel on" id="tab-rug">
     <section id="rugfilter" class="card"><h2>Rug Filter <small>safety checker</small></h2><div class="body"></div></section>
@@ -64,6 +68,6 @@
   <button type="button" data-go="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>More</button>
 </nav>
 <noscript>This dashboard needs JavaScript.</noscript>
-<script src="app.js?v=11.1"></script>
+<script src="app.js?v=12.0"></script>
 </body>
 </html>

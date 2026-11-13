@@ -144,13 +144,16 @@
     pill.className = "pill " + (stale ? "offline" : st);
     pill.textContent = stale ? "⚠ NO UPDATE " + ago(ts).replace(" ago", "") : st === "running" ? "● LIVE" : st === "paused" ? "⏸ PAUSED" : (s || m ? "SNAPSHOT" : "NO DATA");
     pill.title = stale ? "no fresh upload" : st === "running" ? "bot RUNNING" : st;
-    document.getElementById("updated").textContent = ts ? "updated " + fmtTime(ts, true) + " " + tzLabel() + " · " + ago(ts) : "no data";
+    var up = document.getElementById("updated");
+    up.textContent = ts ? "Updated " + fmtTime(ts) + " " + tzLabel() + " · " + ago(ts) : "no data";
+    up.title = ts ? fmtTime(ts, true) + " " + tzLabel() : "";
     var nb = document.getElementById("notices"); nb.textContent = "";
     state.notes.forEach(function (x) { nb.appendChild(h("div", { class: "notice " + x[0], text: x[1] })); });
     if (stale && st !== "offline") nb.appendChild(h("div", { class: "notice warn", text: "Last update " + ago(ts) + ": the bot may be stopped, offline, or (with GITHUB_TOKEN) unable to upload. Open the dashboard from the bot again for fresh numbers." }));
     if (st === "paused") nb.appendChild(h("div", { class: "notice warn", text: "Bot is PAUSED: no new paper trades or signal alerts. Scanning and open-position exits continue. /resume in Telegram." }));
     var mm = useSum ? m : null;
     renderStats(s, mm || (s ? null : m)); renderUnis(s); renderOverview(s, mm || (s ? null : m)); renderSide(s, mm || (s ? null : m));
+    renderPerf(s, mm || (s ? null : m)); renderHealth(s, mm || (s ? null : m));
     renderRugFilter(s); renderKillLog(s);
     renderAccount(s, mm);
     renderPositions(s); renderHistory(s); renderSignals(s, m); renderJudge(s, m); renderStrategies(s); renderScanner(s); renderSettings();
@@ -161,7 +164,7 @@
   function ins(s) { return s && s.insights ? s.insights : null; }
   function int(x) { return num(x) ? String(Math.round(x)).replace(/\B(?=(\d{3})+(?!\d))/g, ",") : "—"; }
   function sinceTxt(s) { var i = ins(s); return i && num(i.totals.since) ? "since " + fmtTime(i.totals.since, true) : ""; }
-  function stat(k, v, m, c) { return h("div", { class: "st" }, h("div", { class: "k", text: k }), h("div", { class: "v " + (c || ""), text: v }), h("div", { class: "m", text: m || "\u00a0" })); }
+  function stat(k, v, m, c) { return h("div", { class: "st" + (c === "bad" ? " badc" : "") }, h("div", { class: "k", text: k }), h("div", { class: "v " + (c || ""), text: v }), h("div", { class: "m", text: m || "\u00a0" })); }
 
   function renderStats(s, m) {
     var b = document.getElementById("stats"); b.textContent = "";
@@ -169,14 +172,16 @@
     var closed = T ? T.closed : (m ? m.cl : null), wins = T ? T.wins : (m ? m.w : null);
     var wr = num(closed) && closed > 0 && num(wins) ? wins / closed * 100 : null;
     b.appendChild(stat("Total Scanned", int(T ? T.scanned : (k ? k[0] : null)), T ? "today " + int(T.scanned_today) : (k ? "" : "no data")));
-    b.appendChild(stat("Rugs Detected", int(T ? T.rugs : (k ? k[1] : null)), T ? "of " + int(T.checked) + " checked" : "", "bad"));
+    b.appendChild(stat("Rugs Detected", int(T ? T.rugs : (k ? k[1] : null)), T ? "of " + int(T.checked) : "", "bad"));
     b.appendChild(stat("Paper Trades", int(T ? T.trades : (k ? k[2] : null)), T ? T.open + " open" : ""));
     b.appendChild(stat("Win Rate", num(wr) ? Math.round(wr) + "%" : "—", num(closed) ? (closed ? wins + "/" + closed + " closed" : "no closed trades") : "", num(wr) ? (wr >= 50 ? "good" : "bad") : ""));
   }
 
   function renderUnis(s) {
     var b = document.getElementById("unis"); b.textContent = "";
-    b.appendChild(h("span", { class: "chip sol", title: "Solana only" }, "◎ Solana"));
+    b.appendChild(h("button", { type: "button", class: "chip sol", title: "Chain: Solana (the only chain this bot scans)",
+      onclick: function () { state.notes = [["", "SHADOW MEME scans Solana only - no other chain to pick."]]; render(); } },
+      "◎ Solana", h("span", { class: "car", text: "▾" })));
     var U = ins(s) ? ins(s).universes : null;
     [["all", "ALL"]].concat(UNIS).forEach(function (u) {
       var x = U && u[0] !== "all" ? U[u[0]] : null, pnl = x ? x.pnl_usd : null;
@@ -208,13 +213,66 @@
     void base;
   }
 
+  function mini(series, start, step, what) {
+    var wrap = h("div", null);
+    if (!series || !series.length) { wrap.appendChild(h("div", { class: "mini-x", text: "no hourly data yet" })); return wrap; }
+    var max = Math.max.apply(null, series.concat([1])), M = h("div", { class: "mini", role: "img",
+      "aria-label": what + " per hour, last " + series.length + " hours: " + series.join(", ") });
+    series.forEach(function (v, i) {
+      var b = h("i", { class: v > 0 ? "on" : "", title: fmtTime(start + i * step) + " " + tzLabel() + ": " + v + " " + what });
+      b.style.height = (v > 0 ? Math.max(8, Math.round(v / max * 100)) : 6) + "%";
+      M.appendChild(b);
+    });
+    wrap.appendChild(M);
+    wrap.appendChild(h("div", { class: "mini-x" }, h("span", { text: fmtTime(start) }), h("span", { text: series.length + "h · per hour" }), h("span", { text: "now" })));
+    return wrap;
+  }
   function renderSide(s, m) {
     var b = document.getElementById("side"); b.textContent = "";
-    var T = ins(s) ? ins(s).totals : null, a = s ? s.account : null;
+    var T = ins(s) ? ins(s).totals : null, a = s ? s.account : null, H = ins(s) ? ins(s).hourly : null;
     b.appendChild(h("div", { class: "sc rug" }, h("div", { class: "k", text: "Rugs Blocked" }), h("div", { class: "v", text: int(T ? T.rugs_today : null) }),
-      h("div", { class: "m", text: T ? "today · " + int(T.checked_today) + " checked" : (m ? "needs full data" : "no data") })));
+      h("div", { class: "m", text: T ? "today · " + int(T.checked_today) + " checked" : (m ? "needs full data" : "no data") }),
+      H ? mini(H.rugs, H.start, H.step, "rugs blocked") : null));
     b.appendChild(h("div", { class: "sc trd" }, h("div", { class: "k", text: "Trades Executed" }), h("div", { class: "v", text: int(T ? T.trades_today : (m ? m.td : null)) }),
-      h("div", { class: "m", text: "today" + (a ? " / target " + a.daily_target : "") + (T ? " · " + T.open + " open" : "") })));
+      h("div", { class: "m", text: "today" + (a ? " / target " + a.daily_target : "") + (T ? " · " + T.open + " open" : "") }),
+      H ? mini(H.trades, H.start, H.step, "paper trades") : null));
+  }
+
+  function donut(rate) {
+    var NS = "http://www.w3.org/2000/svg", svg = document.createElementNS(NS, "svg"), R = 29, C = 2 * Math.PI * R;
+    svg.setAttribute("viewBox", "0 0 70 70");
+    function c(stroke, dash, w) { var e = document.createElementNS(NS, "circle"); e.setAttribute("cx", 35); e.setAttribute("cy", 35); e.setAttribute("r", R);
+      e.setAttribute("fill", "none"); e.setAttribute("stroke", stroke); e.setAttribute("stroke-width", w); e.setAttribute("stroke-linecap", "round");
+      if (dash !== null) e.setAttribute("stroke-dasharray", dash); svg.appendChild(e); }
+    c("rgba(95,243,230,.12)", null, 8);
+    if (num(rate) && rate > 0) c(rate >= 0.5 ? "#2ff59a" : "#19d3c5", (Math.max(0.02, rate) * C).toFixed(1) + " " + C.toFixed(1), 8);
+    return svg;
+  }
+  function renderPerf(s, m) {
+    var b = body("perf");
+    var P = ins(s) && ins(s).perf ? ins(s).perf : null;
+    var closed = P ? P.closed : (m ? m.cl : null), wins = P ? P.wins : (m ? m.w : null);
+    var rate = num(closed) && closed > 0 ? wins / closed : null;
+    var d = h("div", { class: "donut" }, donut(rate), h("div", { class: "c" }, h("b", { text: num(rate) ? Math.round(rate * 100) + "%" : "—" }), h("span", { text: "win rate" })));
+    function li(k, v, c) { return h("div", null, h("span", { text: k }), h("span", { class: c || "", text: v })); }
+    b.appendChild(h("div", { class: "perf" }, d, h("div", { class: "pl" },
+      li("Closed", n(closed)), li("Wins", n(wins), "good"), li("Losses", num(closed) && num(wins) ? String(closed - wins) : "—", "bad"),
+      li("Avg P&L", P && num(P.avg_pnl_pct) ? pct(P.avg_pnl_pct) : "—", P ? cls(P.avg_pnl_pct) : ""))));
+    if (num(closed) && closed === 0) b.appendChild(h("div", { class: "meta", text: "No closed paper trades yet." }));
+  }
+  function renderHealth(s, m) {
+    var b = body("health");
+    var c = s ? s.scanner : null, st = s ? s.status.state : (m ? ({ r: "running", p: "paused", o: "offline" })[m.st] : null);
+    var stale = s && Date.now() / 1000 - s.generated_ts > 20 * 60;
+    var ok = st === "running" && !stale;
+    b.appendChild(h("span", { class: "run " + (ok ? "ok" : "no") }, h("i"), ok ? "Running" : stale ? "No update" : st === "paused" ? "Paused" : "Offline"));
+    function li(k, v) { return h("div", null, h("span", { text: k }), h("span", { text: v })); }
+    b.appendChild(h("div", { class: "hl" },
+      li("Mode", c && c.mode ? String(c.mode).replace("websocket", "WS").replace("+", " + ").replace(/\s*\(.*$/, "") : "PAPER"),
+      li("Uptime", c ? dur(c.uptime_s) : "—"),
+      li("New Tokens", c ? int(num(c.tokens_24h) ? c.tokens_24h : c.new_tokens) + (num(c.tokens_24h) ? " /24h" : "") : "—"),
+      li("Safety Checked", ins(s) ? int(ins(s).totals.checked_today) : (c ? int(c.safety_checked) : "—"))));
+    b.appendChild(h("div", { class: "meta", text: "tokens /24h · checked today" }));
   }
 
   function renderRugFilter(s) {
@@ -295,38 +353,53 @@
     b.appendChild(h("div", { class: "meta", text: "Equity = cash + open positions. Virtual money only." }));
   }
 
+  function niceTicks(lo, hi, n) {
+    var span = hi - lo, raw = span / Math.max(1, n - 1), mag = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10)), st = mag;
+    [1, 2, 2.5, 5, 10].some(function (f) { st = f * mag; return st >= raw; });
+    var out = [], v = Math.ceil(lo / st) * st;
+    for (; v <= hi + st * 1e-6 && out.length < 8; v += st) out.push(+v.toFixed(6));
+    return out;
+  }
   function chart(pts, base, indexX) {
-    var NS = "http://www.w3.org/2000/svg", W = 340, H = 160, P = 8, PB = 18;
+    var NS = "http://www.w3.org/2000/svg", W = 360, H = 172, PL = 40, PR = 8, PT = 10, PB = 20;
     var xs = pts.map(function (p) { return p[0]; }), ys = pts.map(function (p) { return p[1]; }).filter(num);
     if (num(base)) ys.push(base);
     var x0 = Math.min.apply(null, xs), x1 = Math.max.apply(null, xs), y0 = Math.min.apply(null, ys), y1 = Math.max.apply(null, ys);
-    if (y1 - y0 < 0.01) { y0 -= 0.5; y1 += 0.5; }
-    var pad = (y1 - y0) * 0.12; y0 -= pad; y1 += pad;
-    function X(v) { return P + (x1 > x0 ? (v - x0) / (x1 - x0) : 0.5) * (W - 2 * P); }
-    function Y(v) { return 10 + (1 - (v - y0) / (y1 - y0)) * (H - 10 - PB); }
+    if (y1 - y0 < 0.02) { y0 -= 1; y1 += 1; }
+    var pad = (y1 - y0) * 0.15; y0 -= pad; y1 += pad;
+    function X(v) { return PL + (x1 > x0 ? (v - x0) / (x1 - x0) : 0.5) * (W - PL - PR); }
+    function Y(v) { return PT + (1 - (v - y0) / (y1 - y0)) * (H - PT - PB); }
     var svg = document.createElementNS(NS, "svg");
     svg.setAttribute("viewBox", "0 0 " + W + " " + H); svg.setAttribute("class", "chart"); svg.setAttribute("role", "img");
-    svg.setAttribute("aria-label", "Paper equity curve");
+    svg.setAttribute("aria-label", "Paper equity curve (real equity points)");
     function el(t, a, txt, parent) { var e = document.createElementNS(NS, t); for (var k in a) e.setAttribute(k, a[k]); if (txt) e.textContent = txt; (parent || svg).appendChild(e); return e; }
     var good = pts.filter(function (p) { return num(p[1]); });
-    var last = good[good.length - 1], up = !num(base) || last[1] >= base, col = up ? "#22e58b" : "#ff4d6d";
+    var last = good[good.length - 1], up = !num(base) || last[1] >= base, col = up ? "#2fe3d4" : "#ff4d6d";
     var defs = el("defs", {});
     var g = el("linearGradient", { id: "eqfill", x1: 0, y1: 0, x2: 0, y2: 1 }, null, defs);
-    el("stop", { offset: "0", "stop-color": col, "stop-opacity": ".38" }, null, g); el("stop", { offset: "1", "stop-color": col, "stop-opacity": "0" }, null, g);
+    el("stop", { offset: "0", "stop-color": col, "stop-opacity": ".42" }, null, g); el("stop", { offset: "1", "stop-color": col, "stop-opacity": "0" }, null, g);
     var f = el("filter", { id: "glow", x: "-50%", y: "-50%", width: "200%", height: "200%" }, null, defs);
     el("feGaussianBlur", { stdDeviation: "3.2" }, null, f);
-    [0.25, 0.5, 0.75].forEach(function (q) { el("line", { x1: P, x2: W - P, y1: 10 + q * (H - 10 - PB), y2: 10 + q * (H - 10 - PB), stroke: "rgba(167,139,250,.10)", "stroke-width": 1 }); });
-    if (num(base)) el("line", { x1: P, x2: W - P, y1: Y(base), y2: Y(base), stroke: "rgba(236,233,255,.35)", "stroke-dasharray": "3 4", "stroke-width": 1 });
+    // y axis: gridlines + $ labels
+    var ticks = niceTicks(y0, y1, 4), dec = (y1 - y0) < 4 ? 2 : 0;
+    ticks.forEach(function (v) {
+      var y = Y(v); if (y < PT - 1 || y > H - PB + 1) return;
+      el("line", { x1: PL, x2: W - PR, y1: y, y2: y, stroke: "rgba(95,243,230,.09)", "stroke-width": 1 });
+      el("text", { x: PL - 6, y: y + 3, "text-anchor": "end" }, "$" + v.toFixed(dec));
+    });
+    el("line", { x1: PL, x2: PL, y1: PT, y2: H - PB, stroke: "rgba(95,243,230,.18)", "stroke-width": 1 });
+    if (num(base)) el("line", { x1: PL, x2: W - PR, y1: Y(base), y2: Y(base), stroke: "rgba(230,251,250,.35)", "stroke-dasharray": "3 4", "stroke-width": 1 });
     var d = good.map(function (p, i) { return (i ? "L" : "M") + X(p[0]).toFixed(1) + " " + Y(p[1]).toFixed(1); }).join(" ");
     el("path", { d: d + " L" + X(last[0]).toFixed(1) + " " + (H - PB) + " L" + X(good[0][0]).toFixed(1) + " " + (H - PB) + " Z", fill: "url(#eqfill)", stroke: "none" });
-    el("path", { d: d, fill: "none", stroke: col, "stroke-width": 2.2, "stroke-linejoin": "round", "stroke-linecap": "round" });
+    el("path", { d: d, fill: "none", stroke: col, "stroke-width": 2.2, "stroke-linejoin": "round", "stroke-linecap": "round", filter: "drop-shadow(0 0 4px " + col + ")" });
     var cx = X(last[0]), cy = Y(last[1]);
     el("circle", { cx: cx, cy: cy, r: 7, fill: col, opacity: ".55", filter: "url(#glow)" });
     el("circle", { cx: cx, cy: cy, r: 3.6, fill: "#fff", stroke: col, "stroke-width": 2 });
-    var hi = Math.max.apply(null, ys), lo = Math.min.apply(null, ys);
-    el("text", { x: W - P, y: 9, "text-anchor": "end" }, usd(hi));
-    if (hi - lo >= 0.01) el("text", { x: W - P, y: H - PB - 3, "text-anchor": "end" }, usd(lo));
-    if (!indexX) { el("text", { x: P, y: H - 4, "text-anchor": "start" }, fmtTime(x0, true)); el("text", { x: W - P, y: H - 4, "text-anchor": "end" }, fmtTime(x1, true) + " " + tzLabel()); }
+    if (!indexX) {
+      el("text", { x: PL, y: H - 5, "text-anchor": "start" }, fmtTime(x0, true));
+      if (x1 - x0 > 3600) el("text", { x: PL + (W - PL - PR) / 2, y: H - 5, "text-anchor": "middle" }, fmtTime((x0 + x1) / 2));
+      el("text", { x: W - PR, y: H - 5, "text-anchor": "end" }, fmtTime(x1, true) + " " + tzLabel());
+    }
     return svg;
   }
 
@@ -498,7 +571,7 @@
         if (p.button_color) r.setProperty("--accent", p.button_color);
         if (p.button_text_color) r.setProperty("--accent-text", p.button_text_color);
       }
-      var bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#07071a";
+      var bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#031114";
       if (tg.setHeaderColor) tg.setHeaderColor(bg);
       if (tg.setBackgroundColor) tg.setBackgroundColor(bg);
       if (tg.setBottomBarColor) tg.setBottomBarColor(bg);

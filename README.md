@@ -7,7 +7,7 @@ Solana meme coin scanner + **paper-trading** signal bot in Python, built for **A
 > private key, ever. `PAPER_ONLY` is a constant in the code; `.env` cannot turn it off.
 > Signals are not financial advice, and the bot reports only results it actually measured.
 
-## Status: v1.1.3 ✅ all 10 phases done + v1.1 accuracy update ([what changed](#v11---accuracy-update-13-nov-2026), [v1.1.1](#v111---13-nov-2026), [v1.1.2 exits](#v112---let-winners-run-13-nov-2026), [v1.1.3 SL 20%](#v113---stop-loss-20-13-nov-2026), [evidence](docs/V11_ANALYSIS.md), [v1.0 test report](docs/TEST_REPORT.md))
+## Status: v1.2.0 ✅ all 10 phases done + v1.1 accuracy update ([what changed](#v11---accuracy-update-13-nov-2026), [v1.1.1](#v111---13-nov-2026), [v1.1.2 exits](#v112---let-winners-run-13-nov-2026), [v1.1.3 SL 20%](#v113---stop-loss-20-13-nov-2026), [v1.2.0 trades + dashboard](#v120---trades-open-again--new-dashboard-13-nov-2026), [evidence](docs/V11_ANALYSIS.md), [v1.0 test report](docs/TEST_REPORT.md))
 
 | Phase | What | Status |
 |---|---|---|
@@ -226,6 +226,37 @@ whenever a shell opens, so the bot restarts after a box restart as soon as any t
   `HEALTH` log (`pace`) show today's count, target, floor and the end-of-day projection.
 * `tools/box_run.sh` keeps `GH_TOKEN` from the starting shell for the dashboard upload, or uses a stored
   `gh auth login` credential when there is one.
+
+## v1.2.0 - trades open again + new dashboard (13 Nov 2026)
+
+*"Ye trades nahi lag rahi, start kar do."* From v1.1 (17:40 PKT) to 20:18 PKT, **0 paper trades** opened. Why (DB + logs):
+
+| Blocker for >= $1M coins | evidence (17:40-20:18 PKT) |
+|---|---|
+| liquidity/mcap >= 2% trade filter | 16 rejects / 13 coins (many a $14M-mcap / $104k-pool launch template at ~0.7%; real coins like UDTF at 1.94-1.96%, score 80.7) |
+| judge confidence floor 0.60 with confidence = score/100 | all 5 >= $1M BUY WATCH setups VETOED - a score of 50-60 could never reach 0.60, which silently overrode min_score 50-65 |
+| judge late entry for MCAP coins (15% / 15 min) | mihao ($17M, +22% in 15m) vetoed |
+| strategy min_score 60-65 | 9 >= $1M setups scored 51-59 (tracked as SHADOW only) |
+| few >= $1M coins tracked | ~48 coins >= $1M per hour (MCAP 40 / TOP VOLUME 41 members) |
+
+What changed (paper only; $1M mcap floor, $50k liquidity, SL -20%, TP +1000% + trailing, BUY/SELL-only Telegram unchanged):
+* liquidity/mcap floor **2% -> 1.5%**: still blocks the recorded >= $1M rugs (0.76%, 1.2%) and the fake-supply template.
+* Judge: confidence = **0.50 + (score - strategy min_score)/100** (+0.05 for 5m confirmation, minus soft penalties), min
+  confidence **0.60 -> 0.35**, the weak-flow penalty is graded (0.05 at 40-55% buys, 0.10 below 40%), MCAP late-entry
+  **30% / 15m, 80% / 60m** (TOP VOLUME 40% / 100%), large-coin liquidity floor $75k -> $50k (= the trade floor).
+  Hard vetoes for real dangers stay: safety not PASS (mint/freeze authority, extreme holder concentration, creator
+  rug history...), no sell quote, price impact, spread, liquidity < $50k, dump/exhaustion, late entry, correlation.
+  Replayed on the 5 recorded vetoes: 3 now approve (mihao, paws, Max), and NIO (19% buys, falling) plus Anthropic
+  (+10,757% in 60m) stay vetoed.
+* min_score **50** for first_pullback / migration_breakout / momentum_breakout (early_entry keeps 70), as new strategy
+  versions (`migrate_v120`) plus a new judge version.
+* Discovery: GeckoTerminal 3 pages per list (was 1) plus trending 1h / 6h lists, DexScreener latest boosts and profiles on
+  every run (they were only used while behind pace).
+
+Dashboard (GitHub Pages, `docs/`): dark teal/cyan glass redesign. It has a hooded avatar, LIVE / PAPER ONLY pills, 4 stat cards,
+Solana + universe chips, a Paper Equity card (real equity curve with a $ y-axis), Rugs Blocked / Trades Executed cards with
+real 12-hour per-hour mini bars, working tabs, a Performance (Paper) donut and Scanner Health. The snapshot has two new
+blocks, `insights.hourly` and `insights.perf`.
 
 ## v1.1.3 - stop loss 20% (13 Nov 2026)
 

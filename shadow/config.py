@@ -199,7 +199,7 @@ class Settings:
     universe_volume_min_vol_h1: float = 25_000.0
     universe_refresh_sec: int = 30        # snapshot of tracked universe coins (DexScreener batches)
     universe_discover_sec: int = 300      # GeckoTerminal trending/top pools + DexScreener boosts
-    universe_gt_pages: int = 1            # pages per GeckoTerminal list (20 pools each, 3 lists)
+    universe_gt_pages: int = 3            # v1.2: pages per GeckoTerminal list (20 pools each) - was 1
     universe_max_candidates: int = 300
     universe_allow_majors: bool = False   # JUP/RAY/BONK/WIF/PUMP... are not memes to trade unless allowed
     universe_exclude_mints: str = ""      # extra mints to ignore, comma separated
@@ -211,11 +211,11 @@ class Settings:
     quote_near_score: int = 55            # a candidate this close to a signal gets a Jupiter quote
 
     # Judge agent (phase 5): rule-based reviewer of every BUY WATCH
-    judge_min_confidence: float = 0.60
+    judge_min_confidence: float = 0.35    # v1.2: was 0.60 (vetoed every >= $1M setup); confidence is now margin-based
     judge_max_impact_pct: float = 3.0
     judge_max_sell_loss_pct: float = 10.0
     judge_min_liq_new: float = 8_000.0
-    judge_min_liq_large: float = 75_000.0
+    judge_min_liq_large: float = 50_000.0   # v1.2: = the $50k trade liquidity floor (was 75k)
     judge_max_correlated: int = 2
     judge_max_strategy_dd_pct: float = 20.0
 
@@ -253,7 +253,8 @@ class Settings:
     trade_min_mcap_usd: float = 1_000_000.0  # only coins with market cap >= this are traded (all universes)
     eval_min_mcap_usd: float = 750_000.0  # safety check + scoring start here (catch coins before they cross $1M)
     trade_min_liq_usd: float = 50_000.0   # pool liquidity floor for a trade
-    trade_min_liq_mcap: float = 0.02      # liquidity / market cap floor (fake-supply $50M launches have ~0.2%)
+    trade_min_liq_mcap: float = 0.015     # v1.2: 1.5% (was 2%) - still blocks the recorded >=$1M rugs (0.76%, 1.2%)
+                                          # and the fake-supply launch template (~0.2-0.75%)
     trade_min_age_min: float = 10.0       # no trades in a token's first minutes (launch chaos)
     coins_per_day: int = 1000             # unique coins admitted to evaluation per PKT day (0 = unlimited)
     coins_per_day_min: int = 500          # v1.1.1: guaranteed minimum (pace controller lowers the EVAL floor only)
@@ -429,7 +430,7 @@ def load_settings(env_file: str | Path | None = None, env: dict | None = None) -
         universe_volume_min_vol_h1=_num(env, "UNIVERSE_VOLUME_MIN_VOL_H1", 25_000.0, float, w, 0, 1e12),
         universe_refresh_sec=_num(env, "UNIVERSE_REFRESH_SEC", 30, int, w, 10, 3600),
         universe_discover_sec=_num(env, "UNIVERSE_DISCOVER_SEC", 300, int, w, 60, 86400),
-        universe_gt_pages=_num(env, "UNIVERSE_GT_PAGES", 1, int, w, 1, 10),
+        universe_gt_pages=_num(env, "UNIVERSE_GT_PAGES", 3, int, w, 1, 10),
         universe_max_candidates=_num(env, "UNIVERSE_MAX_CANDIDATES", 300, int, w, 10, 3000),
         universe_allow_majors=_str(env, "UNIVERSE_ALLOW_MAJORS", "false").lower() in ("1", "true", "yes", "on"),
         universe_exclude_mints=_str(env, "UNIVERSE_EXCLUDE_MINTS", ""),
@@ -437,11 +438,11 @@ def load_settings(env_file: str | Path | None = None, env: dict | None = None) -
         signal_cooldown_min=_num(env, "SIGNAL_COOLDOWN_MIN", 10, int, w, 1, 1440),
         signal_hold_every_min=_num(env, "SIGNAL_HOLD_EVERY_MIN", 10, int, w, 1, 1440),
         quote_near_score=_num(env, "QUOTE_NEAR_SCORE", 55, int, w, 0, 100),
-        judge_min_confidence=_num(env, "JUDGE_MIN_CONFIDENCE", 0.60, float, w, 0, 1),
+        judge_min_confidence=_num(env, "JUDGE_MIN_CONFIDENCE", 0.35, float, w, 0, 1),
         judge_max_impact_pct=_num(env, "JUDGE_MAX_IMPACT_PCT", 3.0, float, w, 0.1, 100),
         judge_max_sell_loss_pct=_num(env, "JUDGE_MAX_SELL_LOSS_PCT", 10.0, float, w, 0.1, 100),
         judge_min_liq_new=_num(env, "JUDGE_MIN_LIQ_NEW", 8_000.0, float, w, 0, 1e10),
-        judge_min_liq_large=_num(env, "JUDGE_MIN_LIQ_LARGE", 75_000.0, float, w, 0, 1e10),
+        judge_min_liq_large=_num(env, "JUDGE_MIN_LIQ_LARGE", 50_000.0, float, w, 0, 1e10),
         judge_max_correlated=_num(env, "JUDGE_MAX_CORRELATED", 2, int, w, 0, 50),
         judge_max_strategy_dd_pct=_num(env, "JUDGE_MAX_STRATEGY_DD_PCT", 20.0, float, w, 1, 100),
         paper_start_balance=_num(env, "PAPER_START_BALANCE", 100.0, float, w, 1, 1e9),
@@ -473,7 +474,7 @@ def load_settings(env_file: str | Path | None = None, env: dict | None = None) -
         trade_min_mcap_usd=_num(env, "TRADE_MIN_MCAP_USD", 1_000_000.0, float, w, 0, 1e13),
         eval_min_mcap_usd=_num(env, "EVAL_MIN_MCAP_USD", 750_000.0, float, w, 0, 1e13),
         trade_min_liq_usd=_num(env, "TRADE_MIN_LIQ_USD", 50_000.0, float, w, 0, 1e12),
-        trade_min_liq_mcap=_num(env, "TRADE_MIN_LIQ_MCAP", 0.02, float, w, 0, 10),
+        trade_min_liq_mcap=_num(env, "TRADE_MIN_LIQ_MCAP", 0.015, float, w, 0, 10),
         trade_min_age_min=_num(env, "TRADE_MIN_AGE_MIN", 10.0, float, w, 0, 100000),
         coins_per_day=_num(env, "COINS_PER_DAY", 1000, int, w, 0, 10_000_000),
         coins_per_day_min=_num(env, "COINS_PER_DAY_MIN", 500, int, w, 0, 10_000_000),

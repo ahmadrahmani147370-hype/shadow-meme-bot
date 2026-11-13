@@ -255,7 +255,8 @@ def test_widened_discovery_uses_more_free_sources(tmp_path):
     calls.clear()
     u.widen = True
     asyncio.run(u.discover_once())
-    assert normal == 4 and len(calls) == 4 * 3 + 3                     # 4 GT lists x 3 pages + 3 DexScreener lists
+    # v1.2: 5 GT lists x 3 pages + 3 DexScreener lists always; widened adds new_pools (3 pages)
+    assert normal == 5 * 3 + 3 and len(calls) == 6 * 3 + 3
     assert any("new_pools" in c[1] for c in calls) and any("token-profiles/latest" in c[1] for c in calls)
 
 

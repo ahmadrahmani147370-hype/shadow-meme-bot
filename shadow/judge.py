@@ -31,7 +31,8 @@ JUDGE_VERSION = "judge-1"
 APPROVE, VETO = "APPROVE", "VETO"
 
 # late-entry limits per universe: (max % over 15 min, max % over 60 min)
-LATE_ENTRY = {"new": (60.0, 200.0), "volume": (25.0, 60.0), "mcap": (15.0, 40.0)}
+# v1.2: mcap / volume limits relaxed (were 15/40 and 25/60): a +22% 15m breakout of a $17M coin was vetoed
+LATE_ENTRY = {"new": (60.0, 200.0), "volume": (40.0, 100.0), "mcap": (30.0, 80.0)}
 
 
 @dataclass
@@ -79,7 +80,7 @@ def judge_accuracy(history: list[dict]) -> dict:
 
 # Thresholds phase-6 learning may tune (stored as versions of strategy "judge" in strategy_params)
 JUDGE_TUNABLE = ("min_confidence", "max_impact_pct", "max_sell_loss_pct", "min_liq_new", "min_liq_large")
-JUDGE_LIMITS = {"min_confidence": (0.45, 0.90), "max_impact_pct": (0.5, 10.0), "max_sell_loss_pct": (2.0, 25.0),
+JUDGE_LIMITS = {"min_confidence": (0.30, 0.90), "max_impact_pct": (0.5, 10.0), "max_sell_loss_pct": (2.0, 25.0),
                 "min_liq_new": (3000.0, 100000.0), "min_liq_large": (20000.0, 1000000.0)}
 
 
@@ -179,8 +180,8 @@ class Judge:
             reasons.append({"code": "strategy_history", "kind": "info", "detail": f"only {h['n']} closed watches"})
         # soft reasons
         ratio = f.get("buy_ratio_5m")
-        if ratio is not None and ratio < 0.55:
-            soft("weak_flow", f"only {100 * ratio:.0f}% buys in 5m", 0.10)
+        if ratio is not None and ratio < 0.55:      # v1.2: graded (a 46% buy ratio is not a sell-off)
+            soft("weak_flow", f"only {100 * ratio:.0f}% buys in 5m", 0.10 if ratio < 0.40 else 0.05)
         if (f.get("buy_ratio_slope") or 0) < -0.02:
             soft("fading_buyers", "buy ratio falling", 0.05)
         margin = signal["score"] - (signal.get("min_score") or 65)
@@ -194,7 +195,9 @@ class Judge:
         if acc["approved_n"] >= 20 and acc["vetoed_n"] >= 20 and acc["approved_win_rate"] < acc["vetoed_win_rate"]:
             soft("judge_underperforming", f"approved win {acc['approved_win_rate']:.0%} < vetoed "
                                           f"{acc['vetoed_win_rate']:.0%}", 0.05)
-        conf = signal["score"] / 100 + (0.05 if f.get("mtf_up") else 0) \
+        # v1.2: confidence starts at 0.50 for a score exactly at the strategy's minimum and grows with the margin
+        # (was score/100: with a 0.60 floor that silently overrode min_score 50-65 for every >= $1M setup)
+        conf = 0.50 + margin / 100 + (0.05 if f.get("mtf_up") else 0) \
             - sum(r.get("penalty", 0) for r in reasons if r["kind"] == "soft")
         conf = round(max(0.0, min(1.0, conf)), 3)
         if any(r["kind"] == "hard" for r in reasons):
