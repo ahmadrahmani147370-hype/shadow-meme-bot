@@ -138,13 +138,15 @@
     var s = state.snap, m = state.sum;
     var useSum = m && (!s || m.t - s.generated_ts > 20 * 60);
     var st = useSum ? ({ r: "running", p: "paused", o: "offline" })[m.st] || "offline" : (s ? s.status.state : "offline");
-    var pill = document.getElementById("state");
-    pill.className = "pill " + st;
-    pill.textContent = st === "running" ? "▶ RUNNING" : st === "paused" ? "⏸ PAUSED" : (s || m ? "SNAPSHOT" : "NO DATA");
     var ts = useSum ? m.t : (s ? s.generated_ts : null);
+    var stale = ts && Date.now() / 1000 - ts > 20 * 60;
+    var pill = document.getElementById("state");
+    pill.className = "pill " + (stale ? "offline" : st);
+    pill.textContent = stale ? "⚠ NO UPDATE " + ago(ts).replace(" ago", "") : st === "running" ? "▶ RUNNING" : st === "paused" ? "⏸ PAUSED" : (s || m ? "SNAPSHOT" : "NO DATA");
     document.getElementById("updated").textContent = ts ? "updated " + fmtTime(ts, true) + " " + tzLabel() + " · " + ago(ts) : "no data";
     var nb = document.getElementById("notices"); nb.textContent = "";
     state.notes.forEach(function (x) { nb.appendChild(h("div", { class: "notice " + x[0], text: x[1] })); });
+    if (stale && st !== "offline") nb.appendChild(h("div", { class: "notice warn", text: "Last update " + ago(ts) + ": the bot may be stopped, offline, or (with GITHUB_TOKEN) unable to upload. Open the dashboard from the bot again for fresh numbers." }));
     if (st === "paused") nb.appendChild(h("div", { class: "notice warn", text: "Bot is PAUSED: no new paper trades or signal alerts. Scanning and open-position exits continue. /resume in Telegram." }));
     renderAccount(s, useSum ? m : null);
     renderPositions(s); renderHistory(s); renderSignals(s, m); renderJudge(s, m); renderStrategies(s); renderScanner(s);

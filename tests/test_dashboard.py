@@ -338,3 +338,13 @@ def test_page_hides_snapshot_from_another_install(tmp_path, site):
     q = dash.dashboard_url(s, snap).split("?", 1)[1]
     html = dom(f"{base}/index.html?{q}&data=o.json")
     assert "different bot install" in html and "Summary only" in html
+
+
+@needs_chrome
+def test_page_flags_stale_data(tmp_path, site):
+    d, base = site
+    s, db, clock = filled(tmp_path)
+    import time as _t
+    (d / "old.json").write_bytes(dash.snapshot_json(dash.build_snapshot(db, s, {}, now=_t.time() - 3600)))
+    html = dom(f"{base}/index.html?data=old.json")
+    assert "NO UPDATE" in html and "may be stopped" in html and "RUNNING" not in html

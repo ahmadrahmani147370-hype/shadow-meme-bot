@@ -493,6 +493,8 @@ kaam karta rehta hai aur messages baad mein bhej deta hai. Token kabhi log mein 
 `/dashboard`, or the button under the startup message. Mobile-first, dark, follows the Telegram theme,
 everything labelled **PAPER ONLY**.
 
+![Dashboard screenshot from a live paper run on 13 Nov 2026](docs/img/dashboard.png)
+
 Shows: paper account (equity, cash, realized/unrealized P&L, fees, return, equity curve), open positions,
 trade history (last 50), signals per universe (NEW / MCAP / TOP VOLUME, today + 24 h, last 40 BUY WATCH /
 SELL with the judge verdict and result), judge stats (approved vs vetoed, veto precision, edge, top veto
