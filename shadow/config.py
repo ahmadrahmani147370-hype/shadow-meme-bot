@@ -83,6 +83,11 @@ class Settings:
     # Scanner
     scan_interval_sec: int = 20
     max_token_age_min: int = 120
+    scanner_poll_always: bool = True   # PumpPortal's free stream misses most launches -> also poll (see docs)
+    gt_poll_sec: int = 20
+    rc_poll_sec: int = 6
+    ws_idle_timeout_sec: int = 120
+    fallback_after_sec: int = 20
 
     # Paper trading (phase 6). Money values are virtual USD.
     paper_start_balance: float = 100.0
@@ -137,6 +142,11 @@ def load_settings(env_file: str | Path | None = None, env: dict | None = None) -
         log_level=_str(env, "LOG_LEVEL", "INFO").upper(),
         scan_interval_sec=_num(env, "SCAN_INTERVAL_SEC", 20, int, w, 5, 3600),
         max_token_age_min=_num(env, "MAX_TOKEN_AGE_MIN", 120, int, w, 1, 10080),
+        scanner_poll_always=_str(env, "SCANNER_POLL_ALWAYS", "true").lower() in ("1", "true", "yes", "on"),
+        gt_poll_sec=_num(env, "GT_POLL_SEC", 20, int, w, 10, 3600),
+        rc_poll_sec=_num(env, "RC_POLL_SEC", 6, int, w, 3, 3600),
+        ws_idle_timeout_sec=_num(env, "WS_IDLE_TIMEOUT_SEC", 120, int, w, 15, 3600),
+        fallback_after_sec=_num(env, "FALLBACK_AFTER_SEC", 20, int, w, 0, 3600),
         paper_start_balance=_num(env, "PAPER_START_BALANCE", 100.0, float, w, 1, 1e9),
         paper_trade_size=_num(env, "PAPER_TRADE_SIZE", 2.0, float, w, 0.01, 1e6),
         paper_buy_fee=_num(env, "PAPER_BUY_FEE", 0.50, float, w, 0, 1e6),

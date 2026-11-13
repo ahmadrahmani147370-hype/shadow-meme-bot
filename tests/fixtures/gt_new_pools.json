@@ -1,0 +1,751 @@
+{
+ "data": [
+  {
+   "id": "solana_CrneaVh8Qr8eAcFAJccKUsD7xkm5D5EYf3LWwU3SBQHT",
+   "type": "pool",
+   "attributes": {
+    "base_token_price_usd": "0.00000235300281250907198658353240883820705571699458645839364762865604",
+    "base_token_price_native_currency": "0.0000000289292869117275",
+    "quote_token_price_usd": "81.336357155599207595764416639756577845053972868",
+    "quote_token_price_native_currency": "1.0",
+    "base_token_price_quote_token": "0.00000002892928691",
+    "quote_token_price_base_token": "34567046.2964165",
+    "address": "CrneaVh8Qr8eAcFAJccKUsD7xkm5D5EYf3LWwU3SBQHT",
+    "name": "Ryutaro / SOL",
+    "pool_created_at": "2026-11-13T01:47:32Z",
+    "fdv_usd": "2353.0025267134",
+    "market_cap_usd": null,
+    "price_change_percentage": {
+     "m5": "0",
+     "m15": "0",
+     "m30": "0",
+     "h1": "0",
+     "h6": "0",
+     "h24": "0"
+    },
+    "transactions": {
+     "m5": {
+      "buys": 1,
+      "sells": 0,
+      "buyers": 1,
+      "sellers": 0
+     },
+     "m15": {
+      "buys": 1,
+      "sells": 0,
+      "buyers": 1,
+      "sellers": 0
+     },
+     "m30": {
+      "buys": 1,
+      "sells": 0,
+      "buyers": 1,
+      "sellers": 0
+     },
+     "h1": {
+      "buys": 1,
+      "sells": 0,
+      "buyers": 1,
+      "sellers": 0
+     },
+     "h6": {
+      "buys": 1,
+      "sells": 0,
+      "buyers": 1,
+      "sellers": 0
+     },
+     "h24": {
+      "buys": 1,
+      "sells": 0,
+      "buyers": 1,
+      "sellers": 0
+     }
+    },
+    "volume_usd": {
+     "m5": "79.7652239006",
+     "m15": "79.7652239006",
+     "m30": "79.7652239006",
+     "h1": "79.7652239006",
+     "h6": "79.7652239006",
+     "h24": "79.7652239006"
+    },
+    "reserve_in_usd": "1866.08513343165"
+   },
+   "relationships": {
+    "base_token": {
+     "data": {
+      "id": "solana_4CorCgEhTp97TFUM3zXMV1JR217CJC2r2Az54YGgpump",
+      "type": "token"
+     }
+    },
+    "quote_token": {
+     "data": {
+      "id": "solana_So11111111111111111111111111111111111111112",
+      "type": "token"
+     }
+    },
+    "dex": {
+     "data": {
+      "id": "pump-fun",
+      "type": "dex"
+     }
+    }
+   }
+  },
+  {
+   "id": "solana_6L3UzKq1VqmFAuxdKQKJSmtBq8Rw7Cp9ScBHhesSzhTL",
+   "type": "pool",
+   "attributes": {
+    "base_token_price_usd": "0.00078989720015776976455776146305584985103315958997885677842194675",
+    "base_token_price_native_currency": "0.0000784797940690204",
+    "quote_token_price_usd": "81.33629922417367479079831307876329193361626525",
+    "quote_token_price_native_currency": "1.0",
+    "base_token_price_quote_token": "0.00007847979407",
+    "quote_token_price_base_token": "12742.1333333333",
+    "address": "6L3UzKq1VqmFAuxdKQKJSmtBq8Rw7Cp9ScBHhesSzhTL",
+    "name": "FOOD / SOL",
+    "pool_created_at": "2026-11-13T01:47:29Z",
+    "fdv_usd": "6382800.485",
+    "market_cap_usd": null,
+    "price_change_percentage": {
+     "m5": "-79.097",
+     "m15": "-79.097",
+     "m30": "-79.097",
+     "h1": "-79.097",
+     "h6": "-79.097",
+     "h24": "-79.097"
+    },
+    "transactions": {
+     "m5": {
+      "buys": 11,
+      "sells": 1,
+      "buyers": 9,
+      "sellers": 1
+     },
+     "m15": {
+      "buys": 11,
+      "sells": 1,
+      "buyers": 9,
+      "sellers": 1
+     },
+     "m30": {
+      "buys": 11,
+      "sells": 1,
+      "buyers": 9,
+      "sellers": 1
+     },
+     "h1": {
+      "buys": 11,
+      "sells": 1,
+      "buyers": 9,
+      "sellers": 1
+     },
+     "h6": {
+      "buys": 11,
+      "sells": 1,
+      "buyers": 9,
+      "sellers": 1
+     },
+     "h24": {
+      "buys": 11,
+      "sells": 1,
+      "buyers": 9,
+      "sellers": 1
+     }
+    },
+    "volume_usd": {
+     "m5": "0.06326247577",
+     "m15": "0.06326247577",
+     "m30": "0.06326247577",
+     "h1": "0.06326247577",
+     "h6": "0.06326247577",
+     "h24": "0.06326247577"
+    },
+    "reserve_in_usd": "0.0438724425638732"
+   },
+   "relationships": {
+    "base_token": {
+     "data": {
+      "id": "solana_5uS7TEQcJKG53eqSQKJfXBCEw1c5yCa1CwrJGLAoqfKu",
+      "type": "token"
+     }
+    },
+    "quote_token": {
+     "data": {
+      "id": "solana_So11111111111111111111111111111111111111112",
+      "type": "token"
+     }
+    },
+    "dex": {
+     "data": {
+      "id": "meteora-damm-v2",
+      "type": "dex"
+     }
+    }
+   }
+  },
+  {
+   "id": "solana_CxFkreUqJpKX5RaApiVYBSywGT22raC8ZcB7NqxLdnve",
+   "type": "pool",
+   "attributes": {
+    "base_token_price_usd": "0.00000000000404658896885527104710706353512884136381021166111053609796863936",
+    "base_token_price_native_currency": "0.0000000000000497512512301061",
+    "quote_token_price_usd": "81.336426095883813863048307076565314955971216448",
+    "quote_token_price_native_currency": "1.0",
+    "base_token_price_quote_token": "0.00000000000004975125123",
+    "quote_token_price_base_token": "20099996990525.3",
+    "address": "CxFkreUqJpKX5RaApiVYBSywGT22raC8ZcB7NqxLdnve",
+    "name": "FOOD / SOL",
+    "pool_created_at": "2026-11-13T01:47:29Z",
+    "fdv_usd": "0.004046588969",
+    "market_cap_usd": null,
+    "price_change_percentage": {
+     "m5": "0",
+     "m15": "0",
+     "m30": "0",
+     "h1": "0",
+     "h6": "0",
+     "h24": "0"
+    },
+    "transactions": {
+     "m5": {
+      "buys": 1,
+      "sells": 0,
+      "buyers": 1,
+      "sellers": 0
+     },
+     "m15": {
+      "buys": 1,
+      "sells": 0,
+      "buyers": 1,
+      "sellers": 0
+     },
+     "m30": {
+      "buys": 1,
+      "sells": 0,
+      "buyers": 1,
+      "sellers": 0
+     },
+     "h1": {
+      "buys": 1,
+      "sells": 0,
+      "buyers": 1,
+      "sellers": 0
+     },
+     "h6": {
+      "buys": 1,
+      "sells": 0,
+      "buyers": 1,
+      "sellers": 0
+     },
+     "h24": {
+      "buys": 1,
+      "sells": 0,
+      "buyers": 1,
+      "sellers": 0
+     }
+    },
+    "volume_usd": {
+     "m5": "0.0008113308503",
+     "m15": "0.0008113308503",
+     "m30": "0.0008113308503",
+     "h1": "0.0008113308503",
+     "h6": "0.0008113308503",
+     "h24": "0.0008113308503"
+    },
+    "reserve_in_usd": "0.00323688480668579"
+   },
+   "relationships": {
+    "base_token": {
+     "data": {
+      "id": "solana_5uS7TEQcJKG53eqSQKJfXBCEw1c5yCa1CwrJGLAoqfKu",
+      "type": "token"
+     }
+    },
+    "quote_token": {
+     "data": {
+      "id": "solana_So11111111111111111111111111111111111111112",
+      "type": "token"
+     }
+    },
+    "dex": {
+     "data": {
+      "id": "meteora-dbc",
+      "type": "dex"
+     }
+    }
+   }
+  },
+  {
+   "id": "solana_6nATKb3Zx7mdmCzfwcEesiG1uRhrYiRPFY9Q6zAjg44v",
+   "type": "pool",
+   "attributes": {
+    "base_token_price_usd": "0.00000227593394531563128980962398894277003236544917469558751067703872",
+    "base_token_price_native_currency": "0.0000000279817303828009",
+    "quote_token_price_usd": "81.336426095883813863048307076565314955971216448",
+    "quote_token_price_native_currency": "1.0",
+    "base_token_price_quote_token": "0.00000002798173038",
+    "quote_token_price_base_token": "35737604.0123185",
+    "address": "6nATKb3Zx7mdmCzfwcEesiG1uRhrYiRPFY9Q6zAjg44v",
+    "name": "TURBO / SOL",
+    "pool_created_at": "2026-11-13T01:47:29Z",
+    "fdv_usd": "2275.933945",
+    "market_cap_usd": null,
+    "price_change_percentage": {
+     "m5": "0",
+     "m15": "0",
+     "m30": "0",
+     "h1": "0",
+     "h6": "0",
+     "h24": "0"
+    },
+    "transactions": {
+     "m5": {
+      "buys": 1,
+      "sells": 0,
+      "buyers": 1,
+      "sellers": 0
+     },
+     "m15": {
+      "buys": 1,
+      "sells": 0,
+      "buyers": 1,
+      "sellers": 0
+     },
+     "m30": {
+      "buys": 1,
+      "sells": 0,
+      "buyers": 1,
+      "sellers": 0
+     },
+     "h1": {
+      "buys": 1,
+      "sells": 0,
+      "buyers": 1,
+      "sellers": 0
+     },
+     "h6": {
+      "buys": 1,
+      "sells": 0,
+      "buyers": 1,
+      "sellers": 0
+     },
+     "h24": {
+      "buys": 1,
+      "sells": 0,
+      "buyers": 1,
+      "sellers": 0
+     }
+    },
+    "volume_usd": {
+     "m5": "1.9842404241",
+     "m15": "1.9842404241",
+     "m30": "1.9842404241",
+     "h1": "1.9842404241",
+     "h6": "1.9842404241",
+     "h24": "1.9842404241"
+    },
+    "reserve_in_usd": "1805.04321202983"
+   },
+   "relationships": {
+    "base_token": {
+     "data": {
+      "id": "solana_FoLkSimE7wKGX1BRVScFu7qf2pTpi8jNcqjs9QRtpump",
+      "type": "token"
+     }
+    },
+    "quote_token": {
+     "data": {
+      "id": "solana_So11111111111111111111111111111111111111112",
+      "type": "token"
+     }
+    },
+    "dex": {
+     "data": {
+      "id": "pump-fun",
+      "type": "dex"
+     }
+    }
+   }
+  },
+  {
+   "id": "solana_DzcfrEGK6ZEsYfetQuUe9J15rXFCLigs8QTq5YxoEUZ6",
+   "type": "pool",
+   "attributes": {
+    "base_token_price_usd": "0.00000202151474095575278256630389184329796470532236937888262090751",
+    "base_token_price_native_currency": "0.0000000248537831231316",
+    "quote_token_price_usd": "81.33629922417367479079831307876329193361626525",
+    "quote_token_price_native_currency": "1.0",
+    "base_token_price_quote_token": "0.00000002485378312",
+    "quote_token_price_base_token": "40235323.3326999",
+    "address": "DzcfrEGK6ZEsYfetQuUe9J15rXFCLigs8QTq5YxoEUZ6",
+    "name": "ONINU / SOL",
+    "pool_created_at": "2026-11-13T01:47:29Z",
+    "fdv_usd": "4558.629652",
+    "market_cap_usd": null,
+    "price_change_percentage": {
+     "m5": "0",
+     "m15": "0",
+     "m30": "0",
+     "h1": "0",
+     "h6": "0",
+     "h24": "0"
+    },
+    "transactions": {
+     "m5": {
+      "buys": 1,
+      "sells": 0,
+      "buyers": 1,
+      "sellers": 0
+     },
+     "m15": {
+      "buys": 1,
+      "sells": 0,
+      "buyers": 1,
+      "sellers": 0
+     },
+     "m30": {
+      "buys": 1,
+      "sells": 0,
+      "buyers": 1,
+      "sellers": 0
+     },
+     "h1": {
+      "buys": 1,
+      "sells": 0,
+      "buyers": 1,
+      "sellers": 0
+     },
+     "h6": {
+      "buys": 1,
+      "sells": 0,
+      "buyers": 1,
+      "sellers": 0
+     },
+     "h24": {
+      "buys": 1,
+      "sells": 0,
+      "buyers": 1,
+      "sellers": 0
+     }
+    },
+    "volume_usd": {
+     "m5": "5.6119960697",
+     "m15": "5.6119960697",
+     "m30": "5.6119960697",
+     "h1": "5.6119960697",
+     "h6": "5.6119960697",
+     "h24": "5.6119960697"
+    },
+    "reserve_in_usd": "1603.82365851166"
+   },
+   "relationships": {
+    "base_token": {
+     "data": {
+      "id": "solana_H1XhajDM9JympsaasHViDt534doMGwRrRPEKxV2npump",
+      "type": "token"
+     }
+    },
+    "quote_token": {
+     "data": {
+      "id": "solana_So11111111111111111111111111111111111111112",
+      "type": "token"
+     }
+    },
+    "dex": {
+     "data": {
+      "id": "pump-fun",
+      "type": "dex"
+     }
+    }
+   }
+  }
+ ],
+ "included": [
+  {
+   "id": "solana_4CorCgEhTp97TFUM3zXMV1JR217CJC2r2Az54YGgpump",
+   "type": "token",
+   "attributes": {
+    "address": "4CorCgEhTp97TFUM3zXMV1JR217CJC2r2Az54YGgpump",
+    "name": "Ryutaro",
+    "symbol": "Ryutaro",
+    "decimals": 6,
+    "image_url": "https://assets.geckoterminal.com/acf95rjmmo3815667cjyjiw6nrk6",
+    "coingecko_coin_id": null
+   }
+  },
+  {
+   "id": "solana_So11111111111111111111111111111111111111112",
+   "type": "token",
+   "attributes": {
+    "address": "So11111111111111111111111111111111111111112",
+    "name": "Wrapped SOL",
+    "symbol": "SOL",
+    "decimals": 9,
+    "image_url": "https://coin-images.coingecko.com/coins/images/21629/large/solana.jpg?1696520989",
+    "coingecko_coin_id": "wrapped-solana"
+   }
+  },
+  {
+   "id": "pump-fun",
+   "type": "dex",
+   "attributes": {
+    "name": "Pump.fun"
+   }
+  },
+  {
+   "id": "solana_5uS7TEQcJKG53eqSQKJfXBCEw1c5yCa1CwrJGLAoqfKu",
+   "type": "token",
+   "attributes": {
+    "address": "5uS7TEQcJKG53eqSQKJfXBCEw1c5yCa1CwrJGLAoqfKu",
+    "name": "Foodcoin",
+    "symbol": "FOOD",
+    "decimals": 6,
+    "image_url": "https://assets.geckoterminal.com/3bh19hz95zb5ihim5p9kxsonme8r",
+    "coingecko_coin_id": null
+   }
+  },
+  {
+   "id": "meteora-damm-v2",
+   "type": "dex",
+   "attributes": {
+    "name": "Meteora DAMM V2"
+   }
+  },
+  {
+   "id": "meteora-dbc",
+   "type": "dex",
+   "attributes": {
+    "name": "Meteora DBC"
+   }
+  },
+  {
+   "id": "solana_FoLkSimE7wKGX1BRVScFu7qf2pTpi8jNcqjs9QRtpump",
+   "type": "token",
+   "attributes": {
+    "address": "FoLkSimE7wKGX1BRVScFu7qf2pTpi8jNcqjs9QRtpump",
+    "name": "I NEED A NEW TURBO",
+    "symbol": "TURBO",
+    "decimals": 6,
+    "image_url": "https://assets.geckoterminal.com/wfm2hmcr5r7zho39h8435wqkcao9",
+    "coingecko_coin_id": null
+   }
+  },
+  {
+   "id": "solana_H1XhajDM9JympsaasHViDt534doMGwRrRPEKxV2npump",
+   "type": "token",
+   "attributes": {
+    "address": "H1XhajDM9JympsaasHViDt534doMGwRrRPEKxV2npump",
+    "name": "ONINU",
+    "symbol": "ONINU",
+    "decimals": 6,
+    "image_url": "https://assets.geckoterminal.com/pqiy9dhmort5vbemn7kcz1h1ls6w",
+    "coingecko_coin_id": null
+   }
+  },
+  {
+   "id": "solana_4fwHzAYG9XmcBCcQXXqpi3TJVCf4ioLNEuQocPBepump",
+   "type": "token",
+   "attributes": {
+    "address": "4fwHzAYG9XmcBCcQXXqpi3TJVCf4ioLNEuQocPBepump",
+    "name": "Official Vice City Heat Coin",
+    "symbol": "HEAT",
+    "decimals": 6,
+    "image_url": null,
+    "coingecko_coin_id": null
+   }
+  },
+  {
+   "id": "solana_BCeR9WjoSCd9M8daCAVYUK28uXLmfYL3ES1F1S4Epump",
+   "type": "token",
+   "attributes": {
+    "address": "BCeR9WjoSCd9M8daCAVYUK28uXLmfYL3ES1F1S4Epump",
+    "name": "HUANGOVER",
+    "symbol": "HUANG",
+    "decimals": 6,
+    "image_url": "https://assets.geckoterminal.com/ahwf7pstmiuwzc1i8kmphzcyiwxc",
+    "coingecko_coin_id": null
+   }
+  },
+  {
+   "id": "solana_SfEJgDujaH8Qx1PAzD6LhGTxnj8Nhw67jwqTufnpump",
+   "type": "token",
+   "attributes": {
+    "address": "SfEJgDujaH8Qx1PAzD6LhGTxnj8Nhw67jwqTufnpump",
+    "name": "Starvex Universe",
+    "symbol": "Starvex",
+    "decimals": 6,
+    "image_url": null,
+    "coingecko_coin_id": null
+   }
+  },
+  {
+   "id": "solana_5WX93uG8Qymqrrg8KFsbXtApHp295DDdyeuTFKohpump",
+   "type": "token",
+   "attributes": {
+    "address": "5WX93uG8Qymqrrg8KFsbXtApHp295DDdyeuTFKohpump",
+    "name": "Haaland Hair",
+    "symbol": "HALH",
+    "decimals": 6,
+    "image_url": null,
+    "coingecko_coin_id": null
+   }
+  },
+  {
+   "id": "solana_CwuyGWEevMFgLpogTP8s5zjxw3iY5ypwHcwDhNaWpump",
+   "type": "token",
+   "attributes": {
+    "address": "CwuyGWEevMFgLpogTP8s5zjxw3iY5ypwHcwDhNaWpump",
+    "name": "Adincoin",
+    "symbol": "ADIN",
+    "decimals": 6,
+    "image_url": "https://assets.geckoterminal.com/nygtou4mptiuuq6ac7cyxii0ijoz",
+    "coingecko_coin_id": null
+   }
+  },
+  {
+   "id": "solana_TTWofwAge91oFhZs7kpQdyrVRkmevgM88xijGvQFbKo",
+   "type": "token",
+   "attributes": {
+    "address": "TTWofwAge91oFhZs7kpQdyrVRkmevgM88xijGvQFbKo",
+    "name": "Take-Two Interactive Software - Backpack Securities",
+    "symbol": "TTWO",
+    "decimals": 6,
+    "image_url": "https://coin-images.coingecko.com/coins/images/102175225/large/backpack_securities.png?1788858675",
+    "coingecko_coin_id": "take-two-interactive-software-backpack-securities"
+   }
+  },
+  {
+   "id": "solana_BfW2h43dx7vqzgTcYv3W4qcSD5mFrwJNnjT7vgY8pump",
+   "type": "token",
+   "attributes": {
+    "address": "BfW2h43dx7vqzgTcYv3W4qcSD5mFrwJNnjT7vgY8pump",
+    "name": "TURBAN PUMPKIN",
+    "symbol": "$JEETPUMP",
+    "decimals": 6,
+    "image_url": "https://assets.geckoterminal.com/tjvmzqhg135pgxxqwi5977sl0hb7",
+    "coingecko_coin_id": null
+   }
+  },
+  {
+   "id": "solana_5aCsAz9eCSABSipXQYANhGz1E5WizarV5XJZMaNnpump",
+   "type": "token",
+   "attributes": {
+    "address": "5aCsAz9eCSABSipXQYANhGz1E5WizarV5XJZMaNnpump",
+    "name": "Shrimp",
+    "symbol": "Shrimp",
+    "decimals": 6,
+    "image_url": "https://assets.geckoterminal.com/3adlzpbb9d7btzrpl57ml7etovyg",
+    "coingecko_coin_id": null
+   }
+  },
+  {
+   "id": "solana_EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+   "type": "token",
+   "attributes": {
+    "address": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "name": "USD Coin",
+    "symbol": "USDC",
+    "decimals": 6,
+    "image_url": "https://coin-images.coingecko.com/coins/images/6319/large/USDC.png?1769615602",
+    "coingecko_coin_id": "usd-coin"
+   }
+  },
+  {
+   "id": "solana_HLH1gsBQkhTwRBNCFoUt7g8fsoEj8FwAw283XnCdpump",
+   "type": "token",
+   "attributes": {
+    "address": "HLH1gsBQkhTwRBNCFoUt7g8fsoEj8FwAw283XnCdpump",
+    "name": "Screaming Vandal",
+    "symbol": "SCRVAN",
+    "decimals": 6,
+    "image_url": "https://assets.geckoterminal.com/4jyiq3g7leiczycwq7l0d4dgay3l",
+    "coingecko_coin_id": null
+   }
+  },
+  {
+   "id": "solana_3DSfF27HEs4Gbw8hbJQ2D5pfZg1xN6Th4KWunuVVpump",
+   "type": "token",
+   "attributes": {
+    "address": "3DSfF27HEs4Gbw8hbJQ2D5pfZg1xN6Th4KWunuVVpump",
+    "name": "Pullish",
+    "symbol": "BEPE",
+    "decimals": 6,
+    "image_url": "https://assets.geckoterminal.com/vsly2itajo4q7ea32e9pgsrpk8ri",
+    "coingecko_coin_id": null
+   }
+  },
+  {
+   "id": "solana_BXW4A6TpMXXcvZfQig1dzDx6yZHRADs9bJ3mU2ispump",
+   "type": "token",
+   "attributes": {
+    "address": "BXW4A6TpMXXcvZfQig1dzDx6yZHRADs9bJ3mU2ispump",
+    "name": "Lisa",
+    "symbol": "Lisa",
+    "decimals": 6,
+    "image_url": "https://assets.geckoterminal.com/abd81hm26cobyrxgyx3gw9vdqptv",
+    "coingecko_coin_id": null
+   }
+  },
+  {
+   "id": "solana_7smSPu8sKtsM57DEH9ctkS1eLtD6jrCPZHhV8QTipump",
+   "type": "token",
+   "attributes": {
+    "address": "7smSPu8sKtsM57DEH9ctkS1eLtD6jrCPZHhV8QTipump",
+    "name": "song coin",
+    "symbol": "song",
+    "decimals": 6,
+    "image_url": "https://assets.geckoterminal.com/q3qcf5bnfs88aokdwyq3fnpcwlyp",
+    "coingecko_coin_id": null
+   }
+  },
+  {
+   "id": "solana_Boi3NrCLsKaz1vwbs5UKDct742HZLAkvWH6VdACPpump",
+   "type": "token",
+   "attributes": {
+    "address": "Boi3NrCLsKaz1vwbs5UKDct742HZLAkvWH6VdACPpump",
+    "name": "FreakHouse",
+    "symbol": "FHC",
+    "decimals": 6,
+    "image_url": "https://assets.geckoterminal.com/ibq95pqtw1pandice27b5ftm7d7g",
+    "coingecko_coin_id": null
+   }
+  },
+  {
+   "id": "solana_4DHJHdiQm7KCfjWWcVLwfWki42sn9BouKE6Er8LDpump",
+   "type": "token",
+   "attributes": {
+    "address": "4DHJHdiQm7KCfjWWcVLwfWki42sn9BouKE6Er8LDpump",
+    "name": "daddychilllll",
+    "symbol": "daddychil",
+    "decimals": 6,
+    "image_url": "https://assets.geckoterminal.com/wgui5t4dhyhmvrrve26fvmbszga8",
+    "coingecko_coin_id": null
+   }
+  },
+  {
+   "id": "solana_969XvY8UohYYhFfyLdXVfr38Pt76fUtADkFpkkF6pump",
+   "type": "token",
+   "attributes": {
+    "address": "969XvY8UohYYhFfyLdXVfr38Pt76fUtADkFpkkF6pump",
+    "name": "The Amazon Monkey",
+    "symbol": "ELIZABETH",
+    "decimals": 6,
+    "image_url": "https://assets.geckoterminal.com/gh5c66igjk2cj0j9yl6dcef7n2tg",
+    "coingecko_coin_id": null
+   }
+  },
+  {
+   "id": "solana_D5c8S1ocSZPAFJnB7GPUe5bdRUcGjrYCUa28Pwz2pump",
+   "type": "token",
+   "attributes": {
+    "address": "D5c8S1ocSZPAFJnB7GPUe5bdRUcGjrYCUa28Pwz2pump",
+    "name": "SATINU",
+    "symbol": "SATINU",
+    "decimals": 6,
+    "image_url": "https://assets.geckoterminal.com/p7k6ipvalkaec5wwt92gcjlrgbqn",
+    "coingecko_coin_id": null
+   }
+  }
+ ]
+}

@@ -32,11 +32,29 @@ phone itself. Rate limits are from each provider's docs or response headers on t
 | **Birdeye** | `public-api.birdeye.so/defi/price` | ❌ **401 Unauthorized** without `X-API-KEY` | ~60 ms | **Yes** | not used |
 | Telegram Bot API | `api.telegram.org` | ✅ 200 | ~0.8 s | Bot token | ~1 msg/s per chat |
 
+## Phase 2 finding: PumpPortal free stream coverage (13 Nov 2026, ~07:00–07:03 PKT)
+
+A 120-second side-by-side run (websocket vs. polling RugCheck `new_tokens` every 10 s and
+GeckoTerminal `new_pools` every ~30 s) showed the free PumpPortal `subscribeNewToken` stream
+delivered **14 creates**, while GeckoTerminal listed **27 new pump-fun bonding pools** created in the
+same window, of which the websocket had seen only **5 (~19%)**. Of 42 pump-suffix mints RugCheck
+listed in the window, the websocket had seen 5. So the websocket alone misses most launches.
+Phase 2 therefore polls GeckoTerminal (every 20 s) and RugCheck (every 6 s) **all the time**
+(`SCANNER_POLL_ALWAYS=true`), not only when the websocket is down. Migration events from the
+websocket did arrive (1 in each 3-minute run).
+
+Other observations:
+- RugCheck `new_tokens` returns only the latest 10 mints and covers every new SPL mint (not only
+  meme launchpads), so it needs enrichment (name, pool) in phase 3. Polling every 6 s still misses some.
+- GeckoTerminal `new_pools` reports new *pools*, so an old token that gets a new AMM pool (e.g. a
+  $2M-mcap token on meteora-damm-v2) appears "new". Phase 3 must filter by real token age.
+- One wallet (`DMdCJk…`) created many 0-SOL "zero"/spam tokens – a good dev-wallet signal for phase 4.
+
 ## Source plan for phases 2–4
 
 | Need | Primary | Fallback |
 |---|---|---|
-| New Pump.fun launches | PumpPortal `subscribeNewToken` (push, free) | GeckoTerminal `new_pools` (pump-fun dex) every ≥ 15 s; RugCheck `/stats/new_tokens` |
+| New Pump.fun launches | PumpPortal `subscribeNewToken` (push, free) **plus** always-on polling (see finding above) | GeckoTerminal `new_pools` (pump-fun dex) every 20 s; RugCheck `/stats/new_tokens` every 6 s |
 | Pump.fun → PumpSwap/Raydium migration | PumpPortal `subscribeMigration` | DexScreener `dexId` change `pumpfun` → `pumpswap`/`raydium`; GeckoTerminal new pools on `pumpswap`/`raydium` |
 | Other new meme coins (Raydium, Meteora) | GeckoTerminal `new_pools` | DexScreener `token-profiles/latest` + `token-boosts/latest` |
 | Price, mcap, liquidity, volume, buys/sells, age | DexScreener `/tokens/v1/solana/` batched 30 mints per call | GeckoTerminal pool attributes (`transactions`, `volume_usd`, `reserve_in_usd`); Jupiter price v3 for price only |

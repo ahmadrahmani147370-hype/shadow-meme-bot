@@ -131,6 +131,20 @@ def check_sqlite(s: Settings) -> Check:
         return Check("storage", "sqlite", FAIL, f"{type(e).__name__}: {e}")
 
 
+def check_database(s: Settings) -> Check:
+    """Open (or create) the real DB and apply schema migrations."""
+    try:
+        from .db import SCHEMA_VERSION, Database
+
+        d = Database(s.path(s.db_path))
+        v, n = d.version, d.count_seen().get("total", 0)
+        d.close()
+        return Check("storage", "database", OK if v == SCHEMA_VERSION else FAIL,
+                     f"{s.db_path} schema v{v}/{SCHEMA_VERSION}, {n} mints in seen_tokens")
+    except Exception as e:
+        return Check("storage", "database", FAIL, f"{type(e).__name__}: {e}")
+
+
 def check_android() -> list[Check]:
     prefix = os.environ.get("PREFIX", "")
     if "com.termux" not in prefix:
@@ -222,7 +236,7 @@ async def check_network(s: Settings, endpoints=ENDPOINTS, transport=None) -> lis
 def run_checks(s: Settings | None = None, offline: bool = False) -> list[Check]:
     s = s or load_settings()
     checks = [check_python(), *check_packages(), check_paper_only(s), *check_config(s),
-              *check_write_access(s), check_disk(s), check_sqlite(s), *check_android()]
+              *check_write_access(s), check_disk(s), check_sqlite(s), check_database(s), *check_android()]
     if offline:
         checks.append(Check("network", "skipped", WARN, "--offline"))
     else:

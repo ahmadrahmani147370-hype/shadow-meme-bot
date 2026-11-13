@@ -42,6 +42,12 @@ def test_write_access_and_sqlite_cycle(tmp_settings, tmp_path):
     assert list((tmp_path / "data").iterdir()) == []  # scratch DB cleaned up
 
 
+def test_database_check_creates_schema(tmp_settings):
+    c = doctor.check_database(tmp_settings)
+    from shadow.db import SCHEMA_VERSION
+    assert c.status == doctor.OK and f"schema v{SCHEMA_VERSION}/{SCHEMA_VERSION}" in c.detail
+
+
 def test_sqlite_fails_cleanly_on_unwritable_dir(tmp_path):
     blocker = tmp_path / "file"
     blocker.write_text("x")
@@ -146,8 +152,8 @@ def test_main_py_debug_doctor(monkeypatch, tmp_settings, no_pkg_check):
 
 def test_stubs_are_marked():
     import importlib
-    for mod, ph in [("scanner", 2), ("collector", 3), ("safety", 4), ("signals", 5), ("strategies", 5),
-                    ("paper", 6), ("db", 7), ("telegram_bot", 8), ("dashboard", 9)]:
+    for mod, ph in [("collector", 3), ("safety", 4), ("signals", 5), ("strategies", 5),
+                    ("paper", 6), ("telegram_bot", 8), ("dashboard", 9)]:
         m = importlib.import_module(f"shadow.{mod}")
         assert m.PHASE == ph and m.IMPLEMENTED is False
         with pytest.raises(NotImplementedError):
