@@ -7,7 +7,7 @@ Solana meme coin scanner + **paper-trading** signal bot in Python, built for **A
 > private key, ever. `PAPER_ONLY` is a constant in the code; `.env` cannot turn it off.
 > Signals are not financial advice, and the bot reports only results it actually measured.
 
-## Status: Phase 8 of 10 ✅ (Telegram control + alerts; `./start.sh` runs everything)
+## Status: Phase 9 of 10 ✅ (Telegram Mini App dashboard on GitHub Pages)
 
 | Phase | What | Status |
 |---|---|---|
@@ -19,8 +19,8 @@ Solana meme coin scanner + **paper-trading** signal bot in Python, built for **A
 | 6 | Paper trading engine ($100, $2/trade, quote slippage, fees $0 by default, max 5 open) + self-learning | ✅ done |
 | 7 | SQLite database hardening (crash-safe, bounded size, daily backups, CSV export) | ✅ done |
 | 8 | Telegram commands, alerts, daily report | ✅ done |
-| 9 | Dashboard (Telegram Mini App on GitHub Pages) + self-improving strategies | ⏳ next |
-| 10 | Complete testing | ⏳ |
+| 9 | Dashboard (Telegram Mini App on GitHub Pages) + self-improving strategies | ✅ done |
+| 10 | Complete testing | ⏳ next |
 
 Files for later phases exist as clearly marked stubs (`PHASE = N`, `IMPLEMENTED = False`).
 
@@ -486,6 +486,53 @@ khulna/band hona, har strategy update (kya badla, purani → nayi value, kyun, p
 kitne trades par, version), aur raat 12:00 baje (PKT) rozana report. Telegram band ho to bhi bot
 kaam karta rehta hai aur messages baad mein bhej deta hai. Token kabhi log mein nahi likha jaata.
 
+## Dashboard - Telegram Mini App (phase 9)
+
+**URL:** https://ahmadrahmani147370-hype.github.io/shadow-meme-bot/ (GitHub Pages, served from `docs/` on
+`main`). Open it from the bot: the **📊 Dashboard** menu button next to the message box, the button under
+`/dashboard`, or the button under the startup message. Mobile-first, dark, follows the Telegram theme,
+everything labelled **PAPER ONLY**.
+
+Shows: paper account (equity, cash, realized/unrealized P&L, fees, return, equity curve), open positions,
+trade history (last 50), signals per universe (NEW / MCAP / TOP VOLUME, today + 24 h, last 40 BUY WATCH /
+SELL with the judge verdict and result), judge stats (approved vs vetoed, veto precision, edge, top veto
+reasons), strategy versions with their parameters, the strategy_update history (old → new, reason,
+before/after with sample sizes) and scanner health, plus running / paused. Where there is no data it says
+so (empty states); it never shows example or invented numbers.
+
+**How the data gets there (no VPS, the phone has no public URL):**
+1. **Link summary, always on, no setup:** every dashboard button carries a ~0.4 KB summary in the URL
+   (`?s=`: equity, cash, P&L, open/closed trades, today's signals per universe, judge counts, a 24-point
+   equity line). The menu button is refreshed with every snapshot.
+2. **Full data, optional:** set `GITHUB_TOKEN` in `.env`. Every `DASHBOARD_PUSH_MIN` (5) minutes the bot
+   uploads a sanitized `snapshot.json` (whitelisted fields only: no token, no API keys, no error texts) to the
+   branch `dashboard-data` with 3 GitHub API calls. It is one orphan commit that replaces the previous one,
+   so the repository does not grow. The page reads the exact latest commit through api.github.com and
+   raw.githubusercontent.com.
+3. **Nothing reachable:** the page explains what is missing and shows empty states.
+A random install id is in both the snapshot and the link, so the page never mixes a snapshot from another
+install (e.g. a test run) with your bot. If the full data is more than 20 minutes older than the link,
+the page says so and uses the fresher link numbers for the headline.
+
+**Making the token (one time, ~2 minutes):** github.com → Settings → Developer settings → Personal access
+tokens → **Fine-grained tokens** → Generate new token → Repository access: *Only select repositories* →
+`shadow-meme-bot` → Permissions → Repository permissions → **Contents: Read and write** (nothing else) →
+Generate → copy it into `.env` as `GITHUB_TOKEN=...`, then restart `./start.sh`. Note: the repository is
+public, so the paper-trading snapshot is public too (it contains no secrets and no wallet).
+
+Debug: `python main.py --debug dashboard snapshot` (writes `data/dashboard/snapshot.json` and prints the
+link), `... dashboard publish` (uploads once with `GITHUB_TOKEN`), `... dashboard live 600` (runs everything
+without Telegram for 10 minutes, then writes the snapshot).
+
+**Dashboard (phase 9) – Roman Urdu:** Telegram mein bot ke saath **📊 Dashboard** button dabayein (ya
+`/dashboard`). Wahan paper account, equity ka graph, khuli positions, purani trades, har list (NEW / MCAP /
+TOP VOLUME) ke signals, judge ka hisaab, strategies aur unke badlaav, aur scanner ki sehat nazar aati hai.
+Sab kuch PAPER ONLY hai - asli paisa nahi. Bina kisi setup ke button ke link mein khulasa (equity, cash,
+nafa/nuqsan, trades) aata hai. Poora dashboard (positions, history, graphs) chahiye to upar wale tareeqe se
+GitHub ka fine-grained token banayein (sirf is repo ke liye, sirf "Contents: Read and write") aur `.env` mein
+`GITHUB_TOKEN=` ke aage likhein. Data na ho to dashboard saaf likhta hai "abhi data nahi" - jhoote number kabhi
+nahi.
+
 ## Doctor (self-check)
 
 ```bash
@@ -552,7 +599,9 @@ shadow/db.py            SQLite schema v6 (indexes + meta; single-writer tx() + l
 shadow/app.py           phase 8: builds and runs everything (scanner → signals → paper → learning → maintenance → Telegram)
 shadow/telegram_api.py  phase 8: Bot API client (TELEGRAM_API_BASE, backoff on ConnectTimeout, 429 retry_after, token redaction)
 shadow/telegram_bot.py  phase 8: commands, alerts, rate limits, outgoing queue, daily report
-shadow/dashboard.py     phase 9 stub
+shadow/dashboard.py     phase 9: sanitized snapshot, ?s= link summary, GitHub publisher (orphan dashboard-data branch)
+shadow/dashboard_cli.py `--debug dashboard [snapshot|publish|url|live N]`
+docs/index.html, app.js, style.css  the Mini App (GitHub Pages, main /docs)
 tests/                  pytest (config, doctor, scanner, collector, safety, universes, signals, strategies, judge,
                         paper, learning, persistence incl. a real kill -9 test via tests/crash_worker.py;
                         recorded responses + real candles in tests/fixtures/)

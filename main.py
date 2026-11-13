@@ -28,6 +28,10 @@ from shadow.config import load_settings
 
 def _debug(a) -> int:
     cmd, rest = a.debug[0], a.debug[1:]
+    if cmd == "dashboard":
+        from shadow.dashboard_cli import run as dash_run
+
+        return dash_run(load_settings(), rest)
     if cmd == "doctor":
         from shadow.doctor import main as doctor_main
 
@@ -134,7 +138,7 @@ def _debug(a) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=f"SHADOW MEME {__version__} (paper-only)")
-    ap.add_argument("--debug", nargs="+", metavar="CMD", help="debug tools: db [prune|backup|vacuum|optimize|projection|export] | doctor [offline] [json] | scan [seconds] [fallback] | collect [seconds] | "
+    ap.add_argument("--debug", nargs="+", metavar="CMD", help="debug tools: dashboard [snapshot|publish|url|live N] | db [prune|backup|vacuum|optimize|projection|export] | doctor [offline] [json] | scan [seconds] [fallback] | collect [seconds] | "
                          "safety <mint> | safety-live [seconds] | signals [seconds] [quiet] | paper [seconds|report] | learn")
     a = ap.parse_args(argv)
 

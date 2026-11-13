@@ -12,9 +12,11 @@ import logging
 import os
 import signal
 import time
+from pathlib import Path
 
 import httpx
 
+from . import dashboard as dash
 from .collector import Collector
 from .config import Settings
 from .db import Database
@@ -61,6 +63,10 @@ class App:
             self.bot = TelegramBot(s, self.db, self.api, app=self)
         self.paper.paused = self.paused
         self.learn_runs = 0
+        self.publisher = (dash.GitHubPublisher(s.github_token, s.github_repo, s.dashboard_branch)
+                          if s.github_token else None)
+        self.snapshot_path = Path(self.db.path).parent / "dashboard" / "snapshot.json"
+        self._snap, self._snap_ts = None, 0.0
 
     # ------------------------------------------------------------ pause state (persisted)
     @property
@@ -110,6 +116,60 @@ class App:
             d["mcap"], d["volume"] = len(self.uni.members["mcap"]), len(self.uni.members["volume"])
         return d
 
+    # ------------------------------------------------------------ dashboard (phase 9)
+    def live_status(self) -> dict:
+        d = self.status()
+        d["uptime_s"] = int(time.time() - self.started_at)
+        d["errors_recent"] = len(self.scanner.errors) if hasattr(self.scanner, "errors") else None
+        if self.bot:
+            a = self.api
+            d["telegram"] = "ok" if a.reachable else ("unreachable" if a.reachable is False else "starting")
+        return d
+
+    def snapshot(self, max_age: float = 30) -> dict:
+        if self._snap is None or time.time() - self._snap_ts > max_age:
+            self._snap = dash.build_snapshot(self.db, self.s, self.live_status(), paused=self.paused)
+            self._snap_ts = time.time()
+        return self._snap
+
+    def dashboard_link(self) -> str:
+        return dash.dashboard_url(self.s, self.snapshot())
+
+    def dashboard_info(self) -> dict:
+        sn = self.snapshot()
+        a = sn["account"]
+        info = {"summary": f"Equity ${a['equity']:.2f} | cash ${a['cash']:.2f} | open {a['n_open']} | "
+                           f"closed {a['closed']['n']} | {'⏸️ paused' if self.paused else '▶️ running'}"}
+        if self.publisher:
+            from .timeutil import fmt
+            p = self.publisher
+            info["full"] = (f"updated {fmt(p.last_push_ts, '%H:%M')}" if p.pushes else "first upload pending") + \
+                           (f" (last upload failed: {p.last_error[:80]})" if p.failures and p.last_error else "")
+        return info
+
+    async def publish_dashboard(self) -> dict:
+        snap = self.snapshot(max_age=0)
+        out = {"local": str(dash.write_local(snap, self.snapshot_path)), "published": False}
+        if self.publisher:
+            try:
+                out["commit"] = await self.publisher.publish(dash.snapshot_json(snap))
+                out["published"] = True
+            except dash.GitHubError as e:
+                log.warning("dashboard upload failed: %s", e)
+                out["error"] = str(e)
+        if self.bot:
+            await self.bot.refresh_menu_button(dash.dashboard_url(self.s, snap))
+        return out
+
+    async def _dashboard_loop(self) -> None:
+        await asyncio.sleep(20)
+        while True:
+            try:
+                await self.publish_dashboard()
+            except Exception as e:  # noqa: BLE001  the dashboard must never stop the bot
+                log.warning("dashboard snapshot failed: %s", e)
+            await asyncio.sleep(self.s.dashboard_push_min * 60)
+
     # ------------------------------------------------------------ run
     async def _learn_loop(self) -> None:
         while True:
@@ -149,7 +209,8 @@ class App:
                  asyncio.create_task(self.eng.run(), name="signals"),
                  asyncio.create_task(self._learn_loop(), name="learning"),
                  asyncio.create_task(self.maint.run(maint_stop, initial_delay=min(60.0, self.s.maintenance_sec)),
-                                     name="maintenance")]
+                                     name="maintenance"),
+                 asyncio.create_task(self._dashboard_loop(), name="dashboard")]
         if self.uni:
             tasks.append(asyncio.create_task(self.uni.run(), name="universes"))
         if self.bot:
@@ -185,6 +246,8 @@ class App:
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await t
             await self.client.aclose()
+            if self.publisher:
+                await self.publisher.close()
             if self.bot:
                 await self.api.close()
             with contextlib.suppress(Exception):

@@ -75,6 +75,9 @@ def check_config(s: Settings) -> list[Check]:
                  "; ".join(s.warnings) if s.warnings else "loaded (.env + defaults)")]
     out.append(Check("config", "telegram_token", OK if s.telegram_bot_token else WARN,
                      "set" if s.telegram_bot_token else "empty - REQUIRED: the bot runs only with Telegram (nano .env)"))
+    out.append(Check("config", "github_token", OK if s.github_token else WARN,
+                     "set (full dashboard data uploads)" if s.github_token else
+                     "empty - optional: without it the dashboard shows only the summary from the bot's link"))
     out.append(Check("config", "telegram_chat_id", OK if s.telegram_chat_id else WARN,
                      "set" if s.telegram_chat_id else "empty - REQUIRED (your own chat id)"))
     return out

@@ -45,6 +45,7 @@ COMMANDS = {
     "pause": "naye paper trades + signal alerts band (scanning chalti rahe gi)",
     "resume": "dobara shuru",
     "export": "CSV files bhejo (trades, daily, signals, judge, updates, equity)",
+    "dashboard": "dashboard (Mini App) kholo",
     "help": "commands ki list",
 }
 ICON = {"BUY_WATCH": "🟢", "SELL": "🔴", "HOLD": "⏸️", "REJECT": "⛔"}
@@ -71,6 +72,7 @@ class Out:
     content: bytes = b""
     tag: str = ""                 # alert type / reply / update
     on_sent: object = None        # callback after Telegram accepted it
+    markup: dict | None = None    # reply_markup (e.g. web_app button)
     tries: int = 0
     ts: float = field(default_factory=time.time)
 
@@ -238,7 +240,7 @@ class TelegramBot:
         if item.kind == "doc":
             await self.api.send_document(self.chat_id, item.filename, item.content, item.text)
         else:
-            await self.api.send_message(self.chat_id, item.text, retries=2)
+            await self.api.send_message(self.chat_id, item.text, retries=2, reply_markup=item.markup)
 
     async def sender_loop(self) -> None:
         streak = 0
@@ -455,7 +457,13 @@ class TelegramBot:
 
     async def run(self) -> None:
         if self.s.tg_startup_message:
-            self.send_text(self.startup_text(), "startup")
+            url = None
+            try:
+                url = self.dashboard_link()
+            except Exception as e:  # noqa: BLE001
+                log.warning("dashboard link failed: %s", e)
+            self.enqueue(Out("text", text=self.startup_text(), tag="startup", markup={"inline_keyboard": [[
+                {"text": "📊 Open dashboard", "web_app": {"url": url}}]]} if url else None))
         tasks = [asyncio.create_task(self.sender_loop(), name="tg-send"),
                  asyncio.create_task(self.poll_loop(), name="tg-poll"),
                  asyncio.create_task(self.jobs_loop(), name="tg-jobs")]
@@ -478,6 +486,29 @@ class TelegramBot:
     def stop(self) -> None:
         self._stop.set()
         self._wake.set()
+
+    # ------------------------------------------------------------ dashboard (phase 9)
+    def dashboard_link(self) -> str | None:
+        if self.app is not None and hasattr(self.app, "dashboard_link"):
+            return self.app.dashboard_link()
+        return None
+
+    async def refresh_menu_button(self, url: str | None = None) -> bool:
+        """Point the chat menu button at the Mini App (with the fresh summary). Never raises."""
+        if not self.s.tg_menu_button or self.api is None:
+            return False
+        url = url or self.dashboard_link()
+        if not url or url == getattr(self, "_menu_url", None):
+            return False
+        try:
+            await self.api.set_menu_button(self.chat_id, "📊 Dashboard", url)
+            self._menu_url = url
+            self.stats["menu_button_set"] += 1
+            return True
+        except Exception as e:  # noqa: BLE001
+            self.stats["menu_button_fail"] += 1
+            log.warning("could not set the dashboard menu button: %s", self.api.redact(str(e)))
+            return False
 
     # ================================================================ commands
     def cmd_start(self) -> str:
@@ -582,6 +613,23 @@ class TelegramBot:
             return "Resume abhi available nahi."
         self.app.set_paused(False)
         return "▶️ RESUMED: paper trades aur alerts dobara on."
+
+    def cmd_dashboard(self) -> str | None:
+        url = self.dashboard_link()
+        if not url:
+            return "Dashboard abhi available nahi."
+        info = self.app.dashboard_info() if self.app is not None and hasattr(self.app, "dashboard_info") else {}
+        lines = ["📊 SHADOW MEME dashboard (PAPER ONLY)"]
+        if info.get("summary"):
+            lines.append(info["summary"])
+        if info.get("full"):
+            lines.append(f"Full data: {info['full']}")
+        else:
+            lines.append("Full data (positions, history, charts) ke liye .env mein GITHUB_TOKEN set karein - abhi sirf "
+                         "summary dikhe gi.")
+        self.enqueue(Out("text", text="\n".join(lines), tag="reply", markup={"inline_keyboard": [[
+            {"text": "📊 Open dashboard", "web_app": {"url": url}}]]}))
+        return None
 
     def cmd_export(self) -> str:
         from . import export

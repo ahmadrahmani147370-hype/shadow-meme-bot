@@ -150,12 +150,21 @@ class TelegramAPI:
             p["offset"] = offset
         return await self.call("getUpdates", p, timeout=timeout + 10, retries=0)
 
-    async def send_message(self, chat_id: str | int, text: str, retries: int | None = None) -> list[dict]:
+    async def send_message(self, chat_id: str | int, text: str, retries: int | None = None,
+                           reply_markup: dict | None = None) -> list[dict]:
         out = []
-        for part in split_text(text):
-            out.append(await self.call("sendMessage", {"chat_id": chat_id, "text": part,
-                                                       "disable_web_page_preview": True}, retries=retries))
+        parts = split_text(text)
+        for i, part in enumerate(parts):
+            p = {"chat_id": chat_id, "text": part, "disable_web_page_preview": True}
+            if reply_markup and i == len(parts) - 1:
+                p["reply_markup"] = reply_markup
+            out.append(await self.call("sendMessage", p, retries=retries))
         return out
+
+    async def set_menu_button(self, chat_id: str | int, text: str, url: str) -> bool:
+        """Chat menu button that opens a Mini App (https URL)."""
+        return await self.call("setChatMenuButton", {"chat_id": int(chat_id), "menu_button": {
+            "type": "web_app", "text": text[:64], "web_app": {"url": url}}}, retries=1)
 
     async def send_document(self, chat_id: str | int, filename: str, content: bytes, caption: str = "") -> dict:
         return await self.call("sendDocument", {"chat_id": chat_id, "caption": caption[:1000]},

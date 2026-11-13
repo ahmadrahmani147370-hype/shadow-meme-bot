@@ -16,7 +16,7 @@ from . import PAPER_ONLY
 log = logging.getLogger("shadow.config")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SECRET_FIELDS = ("telegram_bot_token", "jupiter_api_key", "birdeye_api_key", "rugcheck_api_key")
+SECRET_FIELDS = ("telegram_bot_token", "github_token", "jupiter_api_key", "birdeye_api_key", "rugcheck_api_key")
 FORBIDDEN_ENV_HINTS = ("PRIVATE_KEY", "SECRET_KEY", "SEED", "MNEMONIC", "WALLET_KEY", "KEYPAIR")
 
 
@@ -89,6 +89,15 @@ class Settings:
     tg_queue_max: int = 300               # outgoing queue while Telegram is unreachable (oldest dropped)
     tg_poll_timeout_sec: int = 25         # getUpdates long-poll timeout
     tg_send_interval_sec: float = 1.1     # min gap between messages (Telegram: ~1 msg/s per chat)
+    tg_menu_button: bool = True           # chat menu button opens the dashboard Mini App
+
+    # Dashboard (phase 9): Telegram Mini App on GitHub Pages (docs/). Optional GITHUB_TOKEN (fine-grained,
+    # this repo only, Contents: read & write) lets the bot push the full snapshot to the dashboard-data branch.
+    github_token: str = ""
+    github_repo: str = "ahmadrahmani147370-hype/shadow-meme-bot"
+    dashboard_url: str = "https://ahmadrahmani147370-hype.github.io/shadow-meme-bot/"
+    dashboard_branch: str = "dashboard-data"
+    dashboard_push_min: float = 5.0       # snapshot every N minutes (local file always; GitHub only with a token)
 
     # Data sources. All free / keyless by default.
     solana_rpc_url: str = "https://api.mainnet-beta.solana.com"
@@ -282,6 +291,12 @@ def load_settings(env_file: str | Path | None = None, env: dict | None = None) -
         tg_queue_max=_num(env, "TELEGRAM_QUEUE_MAX", 300, int, w, 10, 10000),
         tg_poll_timeout_sec=_num(env, "TELEGRAM_POLL_TIMEOUT_SEC", 25, int, w, 0, 50),
         tg_send_interval_sec=_num(env, "TELEGRAM_SEND_INTERVAL_SEC", 1.1, float, w, 0, 60),
+        tg_menu_button=_bool(env, "TELEGRAM_MENU_BUTTON", True),
+        github_token=_str(env, "GITHUB_TOKEN"),
+        github_repo=_str(env, "GITHUB_REPO", Settings.github_repo),
+        dashboard_url=_url(env, "DASHBOARD_URL", Settings.dashboard_url.rstrip("/"), w) + "/",
+        dashboard_branch=_str(env, "DASHBOARD_BRANCH", Settings.dashboard_branch),
+        dashboard_push_min=_num(env, "DASHBOARD_PUSH_MIN", 5.0, float, w, 1, 1440),
         solana_rpc_url=_str(env, "SOLANA_RPC_URL", Settings.solana_rpc_url),
         solana_rpc_fallback=_str(env, "SOLANA_RPC_FALLBACK", Settings.solana_rpc_fallback),
         pumpportal_ws=_str(env, "PUMPPORTAL_WS", Settings.pumpportal_ws),

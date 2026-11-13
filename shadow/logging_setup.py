@@ -37,7 +37,7 @@ def setup_logging(s: Settings) -> logging.Logger:
         fh.setFormatter(fmt)
         sh = logging.StreamHandler()
         sh.setFormatter(fmt)
-        red = RedactFilter([s.telegram_bot_token, s.jupiter_api_key, s.birdeye_api_key, s.rugcheck_api_key])
+        red = RedactFilter([s.telegram_bot_token, s.github_token, s.jupiter_api_key, s.birdeye_api_key, s.rugcheck_api_key])
         for h in (fh, sh):
             h.addFilter(red)
             root.addHandler(h)

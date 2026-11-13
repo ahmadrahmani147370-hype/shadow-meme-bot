@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0e1117">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://telegram.org; connect-src 'self' https://api.github.com https://raw.githubusercontent.com; img-src 'self' data:; style-src 'self'; frame-ancestors *">
+<title>SHADOW MEME - Paper Dashboard</title>
+<link rel="stylesheet" href="style.css?v=9">
+<script async src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+<header id="top">
+  <div class="brand"><span class="logo">🕶️</span><div><div class="name">SHADOW MEME</div><div class="sub" id="updated">loading…</div></div></div>
+  <div class="pills"><span class="pill paper">PAPER ONLY</span><span class="pill" id="state">…</span></div>
+</header>
+<nav id="nav">
+  <a href="#account">Account</a><a href="#positions">Positions</a><a href="#history">History</a><a href="#signals">Signals</a>
+  <a href="#judge">Judge</a><a href="#strategies">Strategies</a><a href="#scanner">Scanner</a>
+</nav>
+<main>
+  <div id="notices"></div>
+  <section id="account"><h2>Paper account <small>virtual $ - asli paisa nahi</small></h2><div class="body"></div></section>
+  <section id="positions"><h2>Open positions <small>khuli paper positions</small></h2><div class="body"></div></section>
+  <section id="history"><h2>Trade history <small>band hui trades</small></h2><div class="body"></div></section>
+  <section id="signals"><h2>Signals per universe</h2><div class="body"></div></section>
+  <section id="judge"><h2>Judge <small>APPROVE / VETO</small></h2><div class="body"></div></section>
+  <section id="strategies"><h2>Strategies &amp; updates <small>self-learning</small></h2><div class="body"></div></section>
+  <section id="scanner"><h2>Scanner health</h2><div class="body"></div></section>
+  <footer>
+    <p><b>PAPER TRADING ONLY.</b> No wallet, no private keys, no real money. Signals are not financial advice.
+    Sirf paper (virtual) trading - asli paisa nahi.</p>
+    <p id="source" class="muted"></p>
+    <button id="refresh" type="button">↻ Refresh</button>
+  </footer>
+</main>
+<noscript>This dashboard needs JavaScript.</noscript>
+<script src="app.js?v=9"></script>
+</body>
+</html>
