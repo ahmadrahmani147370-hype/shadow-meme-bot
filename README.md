@@ -7,7 +7,7 @@ Solana meme coin scanner + **paper-trading** signal bot in Python, built for **A
 > private key, ever. `PAPER_ONLY` is a constant in the code; `.env` cannot turn it off.
 > Signals are not financial advice, and the bot reports only results it actually measured.
 
-## Status: v1.1.0 ✅ all 10 phases done + v1.1 accuracy update ([what changed](#v11---accuracy-update-13-nov-2026), [evidence](docs/V11_ANALYSIS.md), [v1.0 test report](docs/TEST_REPORT.md))
+## Status: v1.1.1 ✅ all 10 phases done + v1.1 accuracy update ([what changed](#v11---accuracy-update-13-nov-2026), [v1.1.1](#v111---13-nov-2026), [evidence](docs/V11_ANALYSIS.md), [v1.0 test report](docs/TEST_REPORT.md))
 
 | Phase | What | Status |
 |---|---|---|
@@ -189,8 +189,8 @@ losses that gapped. Fees were $0 and slippage normal (0.5-3%), so they were not 
 | Market cap >= $1M | Only coins >= $1M are traded. Smaller new launches are still scanned so a coin is ready when it crosses $1M; safety checks + scoring start at $750k. | `TRADE_MIN_MCAP_USD=1000000`, `EVAL_MIN_MCAP_USD=750000` |
 | Liquidity filters | Pool >= $50k and liquidity/mcap >= 2% (fake-supply coins showed $50M "mcap" on a $100k pool; every rugged ">= $1M" coin with a safety report failed safety or this ratio). | `TRADE_MIN_LIQ_USD`, `TRADE_MIN_LIQ_MCAP` |
 | Launch chaos | No trade in a coin's first 10 minutes. | `TRADE_MIN_AGE_MIN=10` |
-| 1000 coins/day | At most 1000 unique coins per PKT day get a safety check + scoring (open positions/watches are always managed). | `COINS_PER_DAY=1000` (0 = unlimited) |
-| Only BUY messages | Telegram pushes only "🟢 BUY" (a paper trade really opened). No SELL/HOLD/REJECT/close/digest/daily/strategy/online messages. Commands still answer, `/strategies` still shows the learning history. | `TELEGRAM_NOTIFY=buy` (`all` = v1.0 behaviour) |
+| 500-1000 coins/day | At most 1000 unique coins per PKT day get a safety check + scoring (open positions/watches are always managed); at least 500 are guaranteed by the pace controller (v1.1.1, below). | `COINS_PER_DAY=1000`, `COINS_PER_DAY_MIN=500` |
+| Only BUY + SELL messages | Telegram pushes only "🟢 BUY" (a paper trade really opened) and, since v1.1.1, "🔴 SELL" (a paper position closed, with P&L and the reason). No HOLD/REJECT/watch/digest/daily/strategy/online messages. Commands still answer, `/strategies` still shows the learning history. | `TELEGRAM_NOTIFY=trades` (`buy` = BUY only, `all` = v1.0 behaviour) |
 | ~1 s prices | Open positions, watches and near-trigger coins (max 30) are refreshed every second with one DexScreener batch call (own 70/min budget; slow lanes 180/min; total 250 < 300). Open positions/watches also get Jupiter price v3 every 5 s (DexScreener's own price only changes every ~30 s). SL/TP/trailing/time/rug exits run on every tick. Measured values are in `HEALTH` → `fast` and in `/status`. | `FAST_REFRESH_SEC=1`, `FAST_MAX_MINTS=30`, `FAST_JUP_SEC=5` |
 | Faster, safe self-learning | Minimum sample 12 closed trades (was 30) with a 4-trade test split, 3 h cooldown, but every measured gain is shrunk: `gain * n / (n + 20)`, so small samples need a much bigger edge. Near-miss setups (score up to 15 below `min_score`) are tracked virtually as `SHADOW` signals so the learner sees their real outcomes too (never traded, never notified). | `LEARN_MIN_TRADES=12`, `LEARN_SHRINK_K=20`, `SHADOW_TRACK=true` |
 | Stricter entries | `early_entry` min score 65 → 70 (recorded watches: score < 70 won 46%, 70-80 won 61-71%); live DB upgraded once, shown in `/strategies`. New `momentum_breakout` strategy for >= $1M coins (breakout + volume/pressure/5m confirmation, no exhaustion, trailing stop). `MIN_TRADE_SCORE` is now only a global floor (50); each strategy's own `min_score` decides. | strategy params (self-tuned) |
@@ -206,6 +206,26 @@ at the top of `~/.bashrc` and `~/.profile` that runs `tools/ensure_running.sh` (
 whenever a shell opens, so the bot restarts after a box restart as soon as any terminal/agent shell starts.
 `bash tools/box_stop.sh` disables the hook until `box_run.sh` is started again (`logs/NO_AUTOSTART`).
 `bash tools/ensure_running.sh -v` shows the state. While the box itself is suspended nothing can run.
+
+## v1.1.1 - 13 Nov 2026
+
+* **Paper balance reset without losing history:** `bash tools/box_stop.sh && python3 tools/reset_paper.py
+  --balance 100` makes a full verified backup (`data/archive/shadow-...-full-pre-reset.db.gz`, never rotated),
+  closes open positions at their last mark (`reset_archived`, no invented fill), copies every trade and the
+  equity curve into `paper_archive_positions` / `paper_archive_equity` with an era label, logs the reset in
+  `paper_resets`, writes CSV copies to `data/archive/`, and only then restarts the account. Signals, watches,
+  judge verdicts, strategy versions and the learning history are untouched.
+* **Telegram BUY + SELL:** `TELEGRAM_NOTIFY=trades` (default) pushes 🟢 BUY and 🔴 SELL (P&L in $ and %,
+  exit reason, entry → exit, hold time). Everything else stays silent.
+* **At least 500 coins/day (max 1000):** a pace controller compares today's unique evaluated coins with
+  `500 × fraction of the PKT day`. Behind pace → the *evaluation* market-cap floor steps down
+  750k → 250k → 100k → 50k → 25k (max 10 extra coins/min, only while below target); at the lowest tier
+  discovery widens (GeckoTerminal +2 pages per list + `new_pools`, DexScreener latest boosts + latest
+  profiles). Ahead by 25 → back up. These extra coins get a safety check + scoring only: **the $1M trade floor
+  and liquidity gates are unchanged**, and they never take fast-lane or sell-quote capacity. `/status` and the
+  `HEALTH` log (`pace`) show today's count, target, floor and the end-of-day projection.
+* `tools/box_run.sh` keeps `GH_TOKEN` from the starting shell for the dashboard upload, or uses a stored
+  `gh auth login` credential when there is one.
 
 ## Token scanner (phase 2)
 

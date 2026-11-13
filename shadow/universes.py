@@ -38,6 +38,10 @@ log = logging.getLogger("shadow.universes")
 GT_BASE = "https://api.geckoterminal.com/api/v2/networks/solana/"
 GT_LISTS = (("trending_pools", {}), ("pools", {"sort": "h24_volume_usd_desc"}), ("pools", {"sort": "h24_tx_count_desc"}))
 DS_BOOSTS_TOP = "https://api.dexscreener.com/token-boosts/top/v1"
+# v1.1.1 widened discovery (only while the daily coin minimum is behind pace)
+GT_WIDE_LISTS = (("new_pools", {}),)
+DS_WIDE = ("https://api.dexscreener.com/token-boosts/latest/v1", "https://api.dexscreener.com/token-profiles/latest/v1")
+WIDE_EXTRA_PAGES = 2
 
 # Not memes: SOL, stables, LSTs, wrapped assets, and "majors" (allowed with UNIVERSE_ALLOW_MAJORS=true)
 NON_MEME_MINTS = {
@@ -211,8 +215,13 @@ class UniverseCollector:
     async def discover_once(self) -> int:
         now = self.clock()
         found: list[str] = []
-        for path, extra in GT_LISTS:
-            for page in range(1, self.s.universe_gt_pages + 1):
+        wide = bool(getattr(self, "widen", False))
+        lists = GT_LISTS + (GT_WIDE_LISTS if wide else ())
+        pages = self.s.universe_gt_pages + (WIDE_EXTRA_PAGES if wide else 0)
+        if wide:
+            self.stats["discover_wide"] += 1
+        for path, extra in lists:
+            for page in range(1, pages + 1):
                 data = await self._get("geckoterminal", GT_BASE + path,
                                        {"page": page, "include": "base_token", **extra})
                 for p in parse_gt_pools(data):
@@ -224,6 +233,8 @@ class UniverseCollector:
                         found.append(p["mint"])
         boosts = await self._get("dexscreener_profiles", DS_BOOSTS_TOP)
         found += parse_ds_boosts(boosts)
+        for url in (DS_WIDE if wide else ()):
+            found += parse_ds_boosts(await self._get("dexscreener_profiles", url))
         for m in found:
             self.candidates[m] = now
         # keep the candidate pool bounded: members first, then most recently seen

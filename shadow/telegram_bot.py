@@ -126,6 +126,21 @@ def buy_text(pos: dict, row: dict | None = None, verdict=None) -> str:
     return "\n".join(lines)
 
 
+def sell_text(p: dict) -> str:
+    """v1.1.1: the SELL push - a paper position really closed, with P&L and the reason."""
+    pnl, pct = p.get("pnl_usd") or 0.0, p.get("pnl_pct") or 0.0
+    e, x = p.get("entry_price"), p.get("exit_price")
+    held = (p.get("exit_ts") or 0) - (p.get("open_ts") or 0)
+    lines = [f"🔴 SELL - {p.get('symbol') or _short(p['mint'])} [{p.get('universe')}] (paper #{p.get('id')})",
+             f"{'✅ PROFIT' if pnl > 0 else '❌ LOSS'} {_usd(pnl)} ({pct:+.1f}%)",
+             f"Reason: {p.get('exit_reason') or '?'}",
+             f"Entry {_px(e)} → exit {_px(x)} (slippage {p.get('exit_slippage_pct') or 0:.2f}%)"
+             + (f" | held {int(held // 60)} min" if held > 0 else ""),
+             f"Strategy {p.get('strategy')} | size {_usd(p.get('size_usd'))}",
+             f"Mint: {p.get('mint')}", PAPER_TAG]
+    return "\n".join(lines)
+
+
 def signal_text(row: dict) -> str:
     a = row.get("alert_type")
     return (f"{ICON.get(a, '-')} {a} - {row.get('symbol') or '?'} [{row.get('universe')}] {row.get('strategy') or ''}\n"
@@ -234,7 +249,7 @@ class TelegramBot:
         if len(self.queue) >= self.s.tg_queue_max:
             # drop the oldest non-essential message first
             for i, q in enumerate(self.queue):
-                if q.tag not in ("update", "daily", "reply"):
+                if q.tag not in ("update", "daily", "reply", "buy", "sell"):
                     del self.queue[i]
                     break
             else:
@@ -306,6 +321,7 @@ class TelegramBot:
 
     @property
     def buy_only(self) -> bool:
+        """True in the quiet modes (buy / trades): only paper trade pushes, no other alerts or reports."""
         return self.s.tg_notify != "all"
 
     def on_signal(self, row: dict, verdict=None) -> None:
@@ -331,6 +347,9 @@ class TelegramBot:
     def on_trade(self, kind: str, pos: dict) -> None:
         try:
             if self.buy_only:
+                if kind == "CLOSE" and self.s.tg_notify == "trades":
+                    self.alert(sell_text(pos), "sell")
+                    return
                 if kind != "OPEN":
                     self.stats["silenced_paper_" + kind.lower()] += 1
                     return
@@ -580,8 +599,12 @@ class TelegramBot:
                              f"realized {_usd(st['realized_pnl'])}")
             if "coins_cap" in st:
                 f = st.get("fast") or {}
-                lines.append(f"Coins checked today {st['coins_today']}/{st['coins_cap'] or '∞'} | fast refresh "
-                             f"p50 {f.get('refresh_s_p50') or '-'}s on {f.get('hot', 0)} hot coins")
+                pc = st.get("pace") or {}
+                lines.append(f"Coins checked today {st['coins_today']} (min {pc.get('min', '-')}, max "
+                             f"{st['coins_cap'] or '∞'}) | pace target now {pc.get('target_now', '-')} | projected "
+                             f"{pc.get('projected_eod', '-')} | eval floor ${pc.get('eval_floor', 0):,.0f}"
+                             + (" | discovery widened" if pc.get("widen") else ""))
+                lines.append(f"Fast refresh p50 {f.get('refresh_s_p50') or '-'}s on {f.get('hot', 0)} hot coins")
             lines.append(f"DB {st.get('db_mb', 0):.1f} MB | strategies " + ", ".join(
                 f"{k} v{v}" for k, v in (st.get("strategies") or {}).items()))
         a = self.api
@@ -589,7 +612,7 @@ class TelegramBot:
         lines.append(f"Telegram {link} | queue {len(self.queue)} | sent {self.stats['sent']} | ignored chats "
                      f"{self.stats['ignored_foreign']}" + (" | ⚠️ 409 conflict" if self.conflict else "")
                      + (" | alerts DRY-RUN" if self.dry_run else "")
-                     + (" | push: BUY only" if self.buy_only else " | push: all"))
+                     + {"buy": " | push: BUY only", "trades": " | push: BUY + SELL only"}.get(self.s.tg_notify, " | push: all"))
         return "\n".join(lines)
 
     def cmd_scanner(self) -> str:

@@ -12,6 +12,9 @@ rm -f logs/NO_AUTOSTART          # starting by hand re-enables the autostart hoo
 exec 9>&- 2>/dev/null || true    # never hold tools/ensure_running.sh's lock
 # a shell-hook start may have a minimal PATH: keep python3 / gh (dashboard upload) reachable
 export PATH="$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.local/bin"
+# dashboard upload (DASHBOARD_PUBLISHER=gh): use the gh login. GH_TOKEN from the starting shell is inherited;
+# without it, fall back to a stored `gh auth login` credential (never written to a file by this script)
+if [ -z "${GH_TOKEN:-}" ] && command -v gh >/dev/null 2>&1; then GH_TOKEN=$(gh auth token 2>/dev/null) && [ -n "$GH_TOKEN" ] && export GH_TOKEN || unset GH_TOKEN; fi
 # Use the token from .env, never a stale exported one (process env beats .env).
 unset TELEGRAM_BOT_TOKEN TELEGRAM_BOT_TOKEN_NEW TG_BOT_TOKEN
 export HEALTH_LOG_SEC=${HEALTH_LOG_SEC:-60}

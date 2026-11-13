@@ -106,7 +106,7 @@ class Settings:
     tg_send_interval_sec: float = 1.1     # min gap between messages (Telegram: ~1 msg/s per chat)
     tg_menu_button: bool = True           # chat menu button opens the dashboard Mini App
     tg_log_only: bool = False             # testing: no Telegram network calls at all, sends only written to the log
-    tg_notify: str = "buy"                # v1.1: buy = ONLY paper BUY notifications are pushed (all = every alert)
+    tg_notify: str = "trades"             # v1.1.1: trades = ONLY paper BUY + SELL (close) pushed; buy = BUY only; all = v1.0
     health_log_sec: int = 300             # HEALTH line (RSS, CPU, DB size, API calls/429s, loop lag) every N seconds
 
     # Dashboard (phase 9): Telegram Mini App on GitHub Pages (docs/). Optional GITHUB_TOKEN (fine-grained,
@@ -256,6 +256,9 @@ class Settings:
     trade_min_liq_mcap: float = 0.02      # liquidity / market cap floor (fake-supply $50M launches have ~0.2%)
     trade_min_age_min: float = 10.0       # no trades in a token's first minutes (launch chaos)
     coins_per_day: int = 1000             # unique coins admitted to evaluation per PKT day (0 = unlimited)
+    coins_per_day_min: int = 500          # v1.1.1: guaranteed minimum (pace controller lowers the EVAL floor only)
+    eval_pace_floors: str = "750000,250000,100000,50000,25000"   # evaluation floors tried when behind pace
+    pace_fill_per_min: int = 10           # max coins/min admitted through a lowered floor
     fast_refresh_sec: float = 1.0         # price refresh for open positions / watches / near-trigger coins (0 = off)
     fast_max_mints: int = 30              # one DexScreener batch call per tick (30 mints max per call)
     fast_near_sec: int = 120              # a coin with a strategy setup stays in the fast set this long
@@ -338,7 +341,7 @@ def load_settings(env_file: str | Path | None = None, env: dict | None = None) -
         tg_send_interval_sec=_num(env, "TELEGRAM_SEND_INTERVAL_SEC", 1.1, float, w, 0, 60),
         tg_menu_button=_bool(env, "TELEGRAM_MENU_BUTTON", True),
         tg_log_only=_bool(env, "TELEGRAM_LOG_ONLY", False),
-        tg_notify=("all" if _str(env, "TELEGRAM_NOTIFY", "buy").lower() == "all" else "buy"),
+        tg_notify=(lambda v: v if v in ("buy", "trades", "all") else "trades")(_str(env, "TELEGRAM_NOTIFY", "trades").lower()),
         health_log_sec=_num(env, "HEALTH_LOG_SEC", 300, int, w, 10, 86400),
         github_token=_str(env, "GITHUB_TOKEN"),
         github_repo=_str(env, "GITHUB_REPO", Settings.github_repo),
@@ -463,6 +466,9 @@ def load_settings(env_file: str | Path | None = None, env: dict | None = None) -
         trade_min_liq_mcap=_num(env, "TRADE_MIN_LIQ_MCAP", 0.02, float, w, 0, 10),
         trade_min_age_min=_num(env, "TRADE_MIN_AGE_MIN", 10.0, float, w, 0, 100000),
         coins_per_day=_num(env, "COINS_PER_DAY", 1000, int, w, 0, 10_000_000),
+        coins_per_day_min=_num(env, "COINS_PER_DAY_MIN", 500, int, w, 0, 10_000_000),
+        eval_pace_floors=_str(env, "EVAL_PACE_FLOORS", "750000,250000,100000,50000,25000"),
+        pace_fill_per_min=_num(env, "PACE_FILL_PER_MIN", 10, int, w, 1, 1000),
         fast_refresh_sec=_num(env, "FAST_REFRESH_SEC", 1.0, float, w, 0, 600),
         fast_max_mints=_num(env, "FAST_MAX_MINTS", 30, int, w, 1, 30),
         fast_near_sec=_num(env, "FAST_NEAR_SEC", 120, int, w, 0, 86400),

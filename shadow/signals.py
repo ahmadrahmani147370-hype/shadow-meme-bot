@@ -327,9 +327,10 @@ class Sources:
 
 class SignalEngine:
     def __init__(self, settings: Settings, db: Database, sources: Sources, *, checker=None, judge=None,
-                 clock=time.time, on_signal=None, paper=None, cap=None):
+                 clock=time.time, on_signal=None, paper=None, cap=None, pace=None):
         self.s, self.db, self.src = settings, db, sources
         self.cap = cap                                  # v1.1 DailyCap (unique coins evaluated per day)
+        self.pace = pace                                # v1.1.1 PaceController (daily minimum)
         self.checker, self.judge = checker, judge
         self.clock = clock
         self.on_signal = on_signal
@@ -406,14 +407,25 @@ class SignalEngine:
 
     def eval_allowed(self, mint: str, md=None) -> bool:
         """Safety check + scoring only for coins near/above the trading floor, under the daily coin cap.
-        New launches below EVAL_MIN_MCAP_USD are still scanned (collector) but cost nothing here."""
+        New launches below EVAL_MIN_MCAP_USD are still scanned (collector) but cost nothing here - unless the
+        pace controller lowered the evaluation floor to reach the daily minimum (v1.1.1)."""
         md = md or self.src.get_market(mint)
         if self.hot(mint):
             return True
         liq = md.liquidity_usd if md else None
-        if self.mcap_of(md) < self.s.eval_min_mcap_usd or (liq is not None and liq < self.s.paper_rug_liquidity_usd):
-            self.stats["skip_below_eval_mcap"] += 1      # (a drained pool's dust price can show a fake huge mcap)
+        if liq is not None and liq < self.s.paper_rug_liquidity_usd:
+            self.stats["skip_below_eval_mcap"] += 1      # drained pool: a dust price can show a fake huge mcap
             return False
+        mcap = self.mcap_of(md)
+        if mcap < self.s.eval_min_mcap_usd:
+            # v1.1.1 pace fill: below the normal floor only to reach COINS_PER_DAY_MIN (evaluation, never trading)
+            if self.cap is not None and self.cap.seen_today(mint) and mcap >= (self.pace.floor if self.pace else 0):
+                return True
+            if not (self.pace is not None and md is not None and mcap > 0 and mcap >= self.pace.floor
+                    and self.pace.allow_fill()):
+                self.stats["skip_below_eval_mcap"] += 1
+                return False
+            self.stats["pace_fill"] += 1
         if self.cap is not None and not self.cap.admit(mint):
             self.stats["skip_daily_cap"] += 1
             return False
@@ -689,8 +701,8 @@ class SignalEngine:
                     self.stats[f"det_{k}"] += 1
                     bu[k] += 1
             ok_strats = [(self.strategies[n], why) for n, ok, why in ev.candidates if ok]
-            if ok_strats:
-                self.proximity[m] = (ev.score, now)
+            if ok_strats and (ev.features.get("mcap") or 0) >= self.s.eval_min_mcap_usd:
+                self.proximity[m] = (ev.score, now)     # pace-fill coins (< $750k) get no quotes / fast lane
             for st, why in ok_strats:
                 await self.handle_candidate(ev, st, why)
         for m in [m for m, (_, ts) in self.proximity.items() if now - ts > 300]:

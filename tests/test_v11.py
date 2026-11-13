@@ -33,7 +33,7 @@ def S(**env):
 def test_v11_defaults():
     s = S()
     assert s.trade_min_mcap_usd == 1e6 and s.eval_min_mcap_usd == 750_000 and s.coins_per_day == 1000
-    assert s.tg_notify == "buy" and s.fast_refresh_sec == 1.0 and s.fast_max_mints == 30
+    assert s.tg_notify == "trades" and s.fast_refresh_sec == 1.0 and s.fast_max_mints == 30
     assert s.trade_min_liq_usd == 50_000 and s.trade_min_liq_mcap == 0.02 and s.trade_min_age_min == 10
     assert s.learn_min_trades == 12 and s.learn_shrink_k == 20 and s.shadow_track
     assert S(coins_per_day=0).coins_per_day == 0 and S(telegram_notify="ALL").tg_notify == "all"
@@ -189,7 +189,7 @@ class API:
 
 
 def test_buy_only_pushes_nothing_but_paper_buys(tmp_path):
-    s = load_settings(env={"TELEGRAM_BOT_TOKEN": "1:x", "TELEGRAM_CHAT_ID": "7922990181"})
+    s = load_settings(env={"TELEGRAM_BOT_TOKEN": "1:x", "TELEGRAM_CHAT_ID": "7922990181", "TELEGRAM_NOTIFY": "buy"})
     assert s.tg_notify == "buy"
     db = Database(str(tmp_path / "t.db"))
     bot = TelegramBot(s, db, API(), clock=lambda: NOW)
