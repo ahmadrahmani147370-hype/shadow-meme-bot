@@ -18,7 +18,7 @@ from shadow.telegram_bot import partial_text, sell_text, trade_text
 
 pytestmark = pytest.mark.v11
 NOW = 1_800_000_000.0
-P = ExitPolicy()
+P = ExitPolicy(sl_pct=0)          # v1.1.2 rules with the strategy's own SL (v1.1.3's fixed 20% SL: test_v113.py)
 
 
 def S(**env):
@@ -136,7 +136,9 @@ def test_paper_stop_loss_and_signal_exit_rules(tmp_path):
     assert pe.close_by_signal(1, "dump_warning") is None      # winners: trailing stop decides
     assert pe.stats["sell_signal_ignored_protected"] == 1
     s, db, pe, t, msgs, pid = _paper(tmp_path / "b")
-    _tick(pe, t, 0.85)
+    _tick(pe, t, 0.81)
+    assert pe.get(pid)["status"] == "open"                   # v1.1.3: -19% is inside the fixed 20% SL
+    _tick(pe, t, 0.79)
     assert pe.get(pid)["exit_reason"] == "stop_loss"
 
 

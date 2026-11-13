@@ -41,7 +41,8 @@ def test_entry_conditions(tmp_path):
     assert mb.entry_conditions("new", det("migration_breakout"), {"since_migration_min": 5})[0]
     assert not mb.entry_conditions("new", det("migration_breakout"), {"since_migration_min": 500})[0]
     lv = fp.levels("mcap", 1.0, {"pullback_low": 0.95})
-    assert abs(lv["sl"] - 0.95 * 0.985) < 1e-9 and abs(lv["tp"] - 11.0) < 1e-9 and lv["time_stop_min"] == 120   # v1.1.2: TP +1000%
-    lv = fp.levels("mcap", 1.0, {"pullback_low": 0.5})                                        # SL capped at 8%
-    assert abs(lv["sl"] - 0.92) < 1e-9
+    # v1.1.3: SL exactly -20% from entry (the pullback low no longer moves it); v1.1.2: TP +1000%
+    assert abs(lv["sl"] - 0.80) < 1e-9 and abs(lv["tp"] - 11.0) < 1e-9 and lv["time_stop_min"] == 120
+    lv = fp.levels("mcap", 1.0, {"pullback_low": 0.5})
+    assert abs(lv["sl"] - 0.80) < 1e-9
     db.close()

@@ -257,7 +257,7 @@ class Settings:
     trade_min_age_min: float = 10.0       # no trades in a token's first minutes (launch chaos)
     coins_per_day: int = 1000             # unique coins admitted to evaluation per PKT day (0 = unlimited)
     coins_per_day_min: int = 500          # v1.1.1: guaranteed minimum (pace controller lowers the EVAL floor only)
-    eval_pace_floors: str = "750000,250000,100000,50000,25000"   # evaluation floors tried when behind pace
+    eval_pace_floors: str = "750000,250000,100000,50000,25000,10000,5000"   # evaluation floors tried when behind pace
     pace_fill_per_min: int = 10           # max coins/min admitted through a lowered floor
     fast_refresh_sec: float = 1.0         # price refresh for open positions / watches / near-trigger coins (0 = off)
     fast_max_mints: int = 30              # one DexScreener batch call per tick (30 mints max per call)
@@ -272,6 +272,7 @@ class Settings:
     exit_partial_pct: float = 30.0
     exit_partial_frac: float = 0.5
     exit_max_hold_h: float = 24.0
+    exit_sl_pct: float = 20.0             # v1.1.3: fixed stop loss -20% from entry, locked (0 = per strategy, learnable)
     learn_rollback_margin_pct: float = 0.0  # new version worse than the old one on the same samples -> rollback
     judge_tuning_enabled: bool = True
     universe_backfill_sec: int = 60       # one GeckoTerminal OHLCV backfill per minute for universe members
@@ -476,7 +477,7 @@ def load_settings(env_file: str | Path | None = None, env: dict | None = None) -
         trade_min_age_min=_num(env, "TRADE_MIN_AGE_MIN", 10.0, float, w, 0, 100000),
         coins_per_day=_num(env, "COINS_PER_DAY", 1000, int, w, 0, 10_000_000),
         coins_per_day_min=_num(env, "COINS_PER_DAY_MIN", 500, int, w, 0, 10_000_000),
-        eval_pace_floors=_str(env, "EVAL_PACE_FLOORS", "750000,250000,100000,50000,25000"),
+        eval_pace_floors=_str(env, "EVAL_PACE_FLOORS", "750000,250000,100000,50000,25000,10000,5000"),
         pace_fill_per_min=_num(env, "PACE_FILL_PER_MIN", 10, int, w, 1, 1000),
         fast_refresh_sec=_num(env, "FAST_REFRESH_SEC", 1.0, float, w, 0, 600),
         fast_max_mints=_num(env, "FAST_MAX_MINTS", 30, int, w, 1, 30),
@@ -490,6 +491,7 @@ def load_settings(env_file: str | Path | None = None, env: dict | None = None) -
         exit_partial_pct=_num(env, "EXIT_PARTIAL_PCT", 30.0, float, w, 1, 10000),
         exit_partial_frac=_num(env, "EXIT_PARTIAL_FRAC", 0.5, float, w, 0, 0.9),
         exit_max_hold_h=_num(env, "EXIT_MAX_HOLD_H", 24.0, float, w, 0, 720),
+        exit_sl_pct=_num(env, "EXIT_SL_PCT", 20.0, float, w, 0, 90),
         learn_rollback_margin_pct=_num(env, "LEARN_ROLLBACK_MARGIN_PCT", 0.0, float, w, 0, 100),
         judge_tuning_enabled=_str(env, "JUDGE_TUNING_ENABLED", "true").lower() in ("1", "true", "yes", "on"),
         universe_backfill_sec=_num(env, "UNIVERSE_BACKFILL_SEC", 60, int, w, 15, 86400),

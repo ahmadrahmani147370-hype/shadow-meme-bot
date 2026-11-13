@@ -26,6 +26,9 @@ class DailyCap:
             db.con.execute("CREATE TABLE IF NOT EXISTS coin_day (day TEXT NOT NULL, mint TEXT NOT NULL, ts REAL, "
                            "PRIMARY KEY (day, mint))")
         self._roll()
+        # v1.1.3: the last hour's admissions survive a restart (projection / rate)
+        self.recent.extend(r[0] for r in db.con.execute(
+            "SELECT ts FROM coin_day WHERE ts >= ? ORDER BY ts", (self.clock() - 3600,)))
 
     def _roll(self) -> None:
         now = self.clock()
@@ -74,13 +77,16 @@ class PaceController:
 
     Target pace = MIN * (fraction of the PKT day elapsed). Every minute:
       * behind pace -> the EVALUATION market-cap floor steps down one tier (EVAL_PACE_FLOORS, e.g.
-        750k -> 250k -> 100k -> 50k -> 25k) and, at the lowest tier, discovery is widened (more GeckoTerminal
+        750k -> 250k -> 100k -> 50k -> 25k -> 10k -> 5k; v1.1.3 added the last two: at 25k only ~16
+        uncounted coins/hour were left, so the minimum could not be reached) and, at the lowest tier, discovery is widened (more GeckoTerminal
         pages / lists, DexScreener latest boosts + profiles)
       * comfortably ahead (target + 25) -> one tier back up, discovery back to normal
     Coins admitted through a lowered floor ("pace fill") are capped at PACE_FILL_PER_MIN and only while the
     count is below target, so the remaining slots up to the max stay free for coins >= $750k.
     TRADING IS NOT AFFECTED: the $1M trade floor and liquidity gates still apply to every trade.
     """
+
+    JUMP_DEFICIT = 50       # coins behind target -> jump to the lowest floor at once
 
     def __init__(self, cap: DailyCap, minimum: int, floors: list[float], fill_per_min: int, clock=time.time):
         self.cap, self.clock = cap, clock
@@ -112,7 +118,12 @@ class PaceController:
             return
         self._last_update = now
         tgt, used = self.target(now), self.cap.used
-        if self.min > 0 and used < tgt:
+        if self.min > 0 and used < tgt - self.JUMP_DEFICIT and self.tier < len(self.floors) - 1:
+            # v1.1.3: far behind (e.g. right after a restart, or a late start in the day): straight to the
+            # lowest evaluation floor instead of one tier per minute
+            self.stats["floor_jump"] += 1
+            self.tier, self.widen = len(self.floors) - 1, True
+        elif self.min > 0 and used < tgt:
             if self.tier < len(self.floors) - 1:
                 self.tier += 1
                 self.stats["floor_down"] += 1
@@ -139,26 +150,32 @@ class PaceController:
         return True
 
     def projection(self, now: float | None = None) -> int:
-        """Today's count projected to 23:59 PKT. Base = admissions at the normal floor in the last hour, extended
-        to the end of the day; pace fills stop at the target, so while they are working the minimum counts
-        as reached. Bounded by the max."""
+        """Today's count projected to 23:59 PKT from the real admission rate of the last hour (pace fills
+        included while behind - they stop at the target), bounded by the max. v1.1.3: no longer reports the
+        minimum as reached just because fills are happening."""
         now = now or self.clock()
         used = self.cap.used
         fills = [t for t in self._fills if now - t <= 3600]
-        normal = sum(1 for t in self.cap.recent if now - t <= 3600) - len(fills)
+        allx = sum(1 for t in self.cap.recent if now - t <= 3600)
+        n = allx if self.behind(now) else max(0, allx - len(fills))
         first = self.cap.recent[0] if self.cap.recent else now
         span_h = min(1.0, max(1 / 60, (now - first) / 3600.0))
         left_h = (day_start(now) + 86400 - now) / 3600.0
-        proj = used + max(0, normal) / span_h * left_h
-        if fills or not self.behind(now):
-            proj = max(proj, self.min)
+        proj = used + n / span_h * left_h
         return int(min(self.cap.cap, proj) if self.cap.cap > 0 else proj)
+
+    def rate_per_h(self, now: float | None = None) -> int:
+        """Coins admitted per hour over the last hour (shorter if the bot started less than an hour ago)."""
+        now = now or self.clock()
+        n = sum(1 for t in self.cap.recent if now - t <= 3600)
+        first = self.cap.recent[0] if self.cap.recent else now
+        return int(n / min(1.0, max(1 / 60, (now - first) / 3600.0)))
 
     def snapshot(self, now: float | None = None) -> dict:
         now = now or self.clock()
         return {"used": self.cap.used, "min": self.min, "max": self.cap.cap, "target_now": round(self.target(now)),
                 "eval_floor": self.floor, "widen": self.widen, "projected_eod": self.projection(now),
-                "fill_admitted": self.stats["fill_admitted"]}
+                "fill_admitted": self.stats["fill_admitted"], "rate_per_h": self.rate_per_h(now)}
 
 
 __all__ = ["DailyCap", "PaceController"]

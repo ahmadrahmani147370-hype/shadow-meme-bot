@@ -7,7 +7,7 @@ Solana meme coin scanner + **paper-trading** signal bot in Python, built for **A
 > private key, ever. `PAPER_ONLY` is a constant in the code; `.env` cannot turn it off.
 > Signals are not financial advice, and the bot reports only results it actually measured.
 
-## Status: v1.1.2 ✅ all 10 phases done + v1.1 accuracy update ([what changed](#v11---accuracy-update-13-nov-2026), [v1.1.1](#v111---13-nov-2026), [v1.1.2 exits](#v112---let-winners-run-13-nov-2026), [evidence](docs/V11_ANALYSIS.md), [v1.0 test report](docs/TEST_REPORT.md))
+## Status: v1.1.3 ✅ all 10 phases done + v1.1 accuracy update ([what changed](#v11---accuracy-update-13-nov-2026), [v1.1.1](#v111---13-nov-2026), [v1.1.2 exits](#v112---let-winners-run-13-nov-2026), [v1.1.3 SL 20%](#v113---stop-loss-20-13-nov-2026), [evidence](docs/V11_ANALYSIS.md), [v1.0 test report](docs/TEST_REPORT.md))
 
 | Phase | What | Status |
 |---|---|---|
@@ -227,13 +227,30 @@ whenever a shell opens, so the bot restarts after a box restart as soon as any t
 * `tools/box_run.sh` keeps `GH_TOKEN` from the starting shell for the dashboard upload, or uses a stored
   `gh auth login` credential when there is one.
 
+## v1.1.3 - stop loss 20% (13 Nov 2026)
+
+*"Stop loss 20% hoga."* Details and replay: [docs/V113_SL.md](docs/V113_SL.md).
+* **Stop loss is exactly -20% from entry** for every strategy and universe (first_pullback too: the pullback low
+  no longer moves it). New strategy versions were created (`migrate_v113`; learned min_score etc. kept).
+* **Locked:** self-learning can't tune `sl_pct` / `max_sl_pct`, and the exit policy enforces -20% even on older
+  positions or watches. `EXIT_SL_PCT=20` (0 = per-strategy SL, learnable again).
+* v1.1.2's TP +1000%, +15% protection, tiered trail and 50% partial at +30% are unchanged.
+* Coin pace fix: the evaluation floor goes down to **$10k and $5k** when behind (at $25k only ~16 uncounted coins/hour
+  were left). Far behind (50+ coins): it jumps straight to the lowest floor. The daily projection is now the real
+  hourly rate (it used to show 500 whenever any fill happened), and the last hour of admissions survives a
+  restart. Trading is still ≥$1M only.
+
+Replay (125 recorded setups, same exits, only the SL differs): v1.1.2 SL (8-15%) won 46.4% with avg -2.48%/trade;
+SL 20% won **57.6%** with avg **-2.31%**. More trades survive the dip and recover, but each loss is bigger, so the
+average is barely better.
+
 ## v1.1.2 - let winners run (13 Nov 2026)
 
 *"Entry lo aur bas jo profit me chale chalne do 1000% / profit rakho."* Full details and replay: [docs/V112_EXITS.md](docs/V112_EXITS.md).
 
 Exit rules now (all strategies, `EXIT_POLICY=run`):
 * **Take profit +1000%**. The old 10-35% TP caps are gone, and self-learning can't lower the TP below 1000%.
-* **Stop loss** on losing trades is unchanged, and so is the **rug guard**.
+* **Stop loss** on losing trades is unchanged (v1.1.3: fixed at -20%), and so is the **rug guard**.
 * **Profit protected** from a +15% peak: the stop moves to at least entry +2%, and a trailing stop follows the peak.
   It is **10%** below the peak while the gain is under +50%, **15%** up to +100%, **25%** up to +300%, and **30%** above.
 * **Partial profit:** 50% is sold once at +30% ("🟡 SELL 50% (partial profit)"); the rest rides.

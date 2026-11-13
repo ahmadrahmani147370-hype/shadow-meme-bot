@@ -55,7 +55,9 @@ def simulate(strategy: str, p: dict, sample: dict, costs: float, policy=None) ->
         return None
     if (sample.get("score") or 0) < p.get("min_score", 0):
         return {"taken": False, "net": 0.0, "reason": "filtered"}
-    if strategy == "first_pullback":
+    if "sl_pct" in p:                       # v1.1.3: fixed SL for every strategy
+        dist = p["sl_pct"]
+    elif strategy == "first_pullback":
         dist = min(sample["sl_dist_pct"] or p["max_sl_pct"], p["max_sl_pct"])
     else:
         dist = p["sl_pct"]
@@ -229,7 +231,11 @@ class Learner:
         """v1.1.2: with the run exit policy, TP (1000%) and the trailing stop belong to the policy - the learner
         tunes only entries / SL / time stop and can never shrink the take profit back."""
         keys = TUNABLE[name]
-        return tuple(k for k in keys if k not in self.POLICY_KEYS) if self.policy.run else keys
+        if self.policy.run:
+            keys = tuple(k for k in keys if k not in self.POLICY_KEYS)
+        if getattr(self.s, "exit_sl_pct", 0):        # v1.1.3: stop loss locked at EXIT_SL_PCT (20%)
+            keys = tuple(k for k in keys if k not in ("sl_pct", "max_sl_pct"))
+        return keys
 
     def _last_change_ts(self, target: str) -> float:
         r = self.db.con.execute("SELECT MAX(ts) FROM strategy_updates WHERE target=?", (target,)).fetchone()

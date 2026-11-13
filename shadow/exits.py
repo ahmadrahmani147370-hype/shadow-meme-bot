@@ -3,7 +3,8 @@ the virtual watch outcomes and the self-learning replay so all three follow the 
 
 EXIT_POLICY=run (default):
   * take profit at +EXIT_TP_PCT (1000%) - no low TP caps
-  * stop loss: the strategy's SL until the position is protected (unchanged for losing trades)
+  * stop loss: v1.1.3 exactly -EXIT_SL_PCT (20%) from entry for every strategy, locked (self-learning can't
+    change it); EXIT_SL_PCT=0 = the strategy's own SL
   * protected once the peak reaches +EXIT_BE_TRIGGER_PCT (15%): stop >= entry +EXIT_BE_LOCK_PCT (2%,
     covers exit slippage) - a winner can no longer turn into a loss (except a gap / rug)
   * trailing stop from the peak, widening with the gain: EXIT_TRAIL_TIERS "50:10,100:15,300:25,inf:30"
@@ -50,6 +51,7 @@ class ExitPolicy:
     partial_pct: float = 30.0
     partial_frac: float = 0.5
     max_hold_h: float = 24.0
+    sl_pct: float = 20.0          # v1.1.3: fixed stop loss from entry (0 = the strategy's SL)
 
     @classmethod
     def from_settings(cls, s) -> "ExitPolicy":
@@ -57,7 +59,8 @@ class ExitPolicy:
                    be_trigger_pct=getattr(s, "exit_be_trigger_pct", 15.0), be_lock_pct=getattr(s, "exit_be_lock_pct", 2.0),
                    tiers=parse_tiers(getattr(s, "exit_trail_tiers", "50:10,100:15,300:25,inf:30")),
                    partial_pct=getattr(s, "exit_partial_pct", 30.0), partial_frac=getattr(s, "exit_partial_frac", 0.5),
-                   max_hold_h=getattr(s, "exit_max_hold_h", 24.0))
+                   max_hold_h=getattr(s, "exit_max_hold_h", 24.0),
+                   sl_pct=getattr(s, "exit_sl_pct", 20.0))
 
     @property
     def run(self) -> bool:
@@ -74,6 +77,8 @@ class ExitPolicy:
 
     def stop(self, entry: float, peak: float, sl: float | None) -> tuple[float, str]:
         """Effective stop price and what it is: 'sl' / 'breakeven' / 'trail'."""
+        if self.sl_pct and entry:
+            sl = entry * (1 - self.sl_pct / 100)          # v1.1.3: exactly -20% from entry, all strategies
         stop, kind = (sl or 0.0), "sl"
         if not entry or not self.protected(entry, peak):
             return stop, kind
@@ -93,7 +98,7 @@ class ExitPolicy:
         for lim, tr in tiers:
             parts.append(f"{tr:g}% (peak {'≥' if lim == float('inf') else '<'}+{(lo if lim == float('inf') else lim):g}%)")
             lo = lim
-        s = (f"TP +{self.tp_pct:g}% | SL kept | after +{self.be_trigger_pct:g}%: stop ≥ entry+{self.be_lock_pct:g}% "
+        s = (f"TP +{self.tp_pct:g}% | SL {'-%g%%' % self.sl_pct if self.sl_pct else 'per strategy'} | after +{self.be_trigger_pct:g}%: stop ≥ entry+{self.be_lock_pct:g}% "
              f"& trail " + ", ".join(parts))
         if self.partial_frac > 0:
             s += f" | sell {self.partial_frac * 100:.0f}% at +{self.partial_pct:g}%"

@@ -128,6 +128,9 @@ class PaperEngine:
         market = float(row["price"] or row["entry"])
         entry = market * (1 + slip / 100)
         qty = s.paper_trade_size / entry
+        sl = row.get("sl")
+        if self.policy.run and self.policy.sl_pct:      # v1.1.3: stored SL = what the exit policy enforces
+            sl = market * (1 - self.policy.sl_pct / 100)
         cur = None
         with self.db.tx():
             cur = self.db.con.execute(
@@ -137,7 +140,7 @@ class PaperEngine:
                 " max_up_pct, max_down_pct) VALUES (?,?,?,?,?,?,'open',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,0)",
                 (row.get("id"), row["mint"], row.get("symbol"), row.get("universe"), row.get("strategy"),
                  row.get("params_version"), now, market, entry, s.paper_trade_size, qty, s.paper_buy_fee, slip,
-                 row.get("sl"), row.get("tp"), params.get("trail_pct"), params.get("trail_activate_pct"), market,
+                 sl, row.get("tp"), params.get("trail_pct"), params.get("trail_activate_pct"), market,
                  row.get("time_stop_min"), row.get("judge_confidence"), row.get("score"), market, now))
             # same transaction as the position row: a kill -9 can never leave a position without its cash debit
             self._cash_add(-(s.paper_trade_size + s.paper_buy_fee), fee=s.paper_buy_fee, pnl=-s.paper_buy_fee)

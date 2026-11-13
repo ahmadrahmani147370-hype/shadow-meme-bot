@@ -11,11 +11,25 @@ from shadow.models import Candle, MarketData
 from shadow.signals import compute_features, run_detectors, score_signal
 from shadow.strategies import DEFAULT_PARAMS, Strategy
 
-DBS = sys.argv[1:]          # usage: python3 tools/analysis/replay_v112.py data/shadow.db [more.db ...]
+DBS = sys.argv[1:]          # SL_MODE=v112|v113 env selects the stop loss rule          # usage: python3 tools/analysis/replay_v112.py data/shadow.db [more.db ...]
 # v1.1 / v1.1.1 take-profit levels (DEFAULT_PARAMS now holds 1000%) - the "classic" baseline uses these
 OLD_TP = {'early_entry': {'new': 30.0}, 'first_pullback': {'new': 25.0, 'mcap': 10.0, 'volume': 15.0},
           'migration_breakout': {'new': 35.0, 'mcap': 20.0, 'volume': 25.0},
           'momentum_breakout': {'new': 15.0, 'mcap': 10.0, 'volume': 12.0}}
+# v1.1.2 stop losses (v1.1.3 fixed every SL at 20% from entry): sl_pct, or first_pullback = pullback low - x%
+# capped at max_sl_pct
+OLD_SL = {'early_entry': {'new': 12.0}, 'migration_breakout': {'new': 10.0, 'mcap': 7.0, 'volume': 8.0},
+          'momentum_breakout': {'new': 10.0, 'mcap': 8.0, 'volume': 8.0}}
+OLD_FP = {'new': (3.0, 15.0), 'mcap': (1.5, 8.0), 'volume': (2.0, 10.0)}     # (below low %, max SL %)
+SL_MODE = os.environ.get('SL_MODE', 'v113')      # v113 = fixed 20% | v112 = per-strategy SL
+
+
+def old_sl(n, u, price, f):
+    if n == 'first_pullback':
+        below, mx = OLD_FP[u]
+        sl = f['pullback_low'] * (1 - below / 100) if f.get('pullback_low') else price * (1 - mx / 100)
+        return max(sl, price * (1 - mx / 100))
+    return price * (1 - OLD_SL[n][u] / 100)
 def load(DB):
     c = sqlite3.connect(f'file:{DB}?mode=ro', uri=True)
     uni = {m: u for m, u in c.execute("select mint, universe from universe_members")}
@@ -111,8 +125,9 @@ for DB in DBS:
                 last[n] = ts
                 lv = st.levels(u, cs[i].close, f)
                 big = mcap >= 1e6 and liq and liq >= 50e3 and liq / mcap >= 0.02
-                setups.append(("ALL", cs, i, sn, keys, lv['sl'], p, n))
-                if big: setups.append((">=1M+gates", cs, i, sn, keys, lv['sl'], p, n))
+                sl = lv['sl'] if SL_MODE == 'v113' else old_sl(n, u, cs[i].close, f)
+                setups.append(("ALL", cs, i, sn, keys, sl, p, n))
+                if big: setups.append((">=1M+gates", cs, i, sn, keys, sl, p, n))
 for grp in ("ALL", ">=1M+gates"):
     ss = [x for x in setups if x[0] == grp]
     print(f"\n=== {grp}: {len(ss)} setups (strategies {dict(collections.Counter(x[7] for x in ss))})")
@@ -123,7 +138,9 @@ for grp in ("ALL", ">=1M+gates"):
         peaks = [(r[2] / 1) for r in res]
         al = [r[0] for r in res]; op = [r[0] for r in res if r[1] == 'open@end']
         print(f"{lab:46} ALL(open marked) n={len(al)} win={sum(x > 0 for x in al) / len(al) * 100:5.1f}% avg={statistics.fmean(al):7.2f}% "
-              f"sum={sum(al):8.1f} | open@end n={len(op)} avg={statistics.fmean(op) if op else 0:6.1f}% | closed n={len(pn)} win={sum(x > 0 for x in pn) / len(pn) * 100:4.1f}% avg={statistics.fmean(pn):6.2f}% best={max(al):6.1f}%")
+              f"sum={sum(al):8.1f} | open@end n={len(op)} avg={statistics.fmean(op) if op else 0:6.1f}% | closed n={len(pn)} win={sum(x > 0 for x in pn) / len(pn) * 100:4.1f}% avg={statistics.fmean(pn):6.2f}% best={max(al):6.1f}% "
+              f"| worst={min(al):6.1f}% exits={dict(collections.Counter(r[1] for r in res))} "
+              f"avg_loss={statistics.fmean([x for x in al if x <= 0] or [0]):6.2f}%")
         continue
         print(f"{lab:42} closed n={len(pn):3} win={sum(x > 0 for x in pn) / len(pn) * 100:5.1f}% avg={statistics.fmean(pn):7.2f}% "
               f"med={statistics.median(pn):6.2f}% sum={sum(pn):8.1f} best={max(pn):7.1f}% open@end={len(res) - len(closed)} "

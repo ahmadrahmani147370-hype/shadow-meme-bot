@@ -152,18 +152,19 @@ def pace_at(tmp_path, now, used=0, cap=1000, minimum=500):
     c = DailyCap(db, cap, clock=lambda: t["now"])
     for i in range(used):
         c.admit(f"m{i}")
-    return db, t, c, PaceController(c, minimum, [750_000, 250_000, 100_000, 50_000, 25_000], 10, clock=lambda: t["now"])
+    return db, t, c, PaceController(c, minimum, [750_000, 250_000, 100_000, 50_000, 25_000, 10_000, 5_000], 10,
+                                         clock=lambda: t["now"])
 
 
 def test_pace_lowers_eval_floor_then_widens_when_behind(tmp_path):
-    db, t, c, pc = pace_at(tmp_path, MID + 12 * 3600, used=20)          # noon: target 250, only 20
+    db, t, c, pc = pace_at(tmp_path, MID + 12 * 3600, used=220)         # noon: target 250, 30 behind
     assert pc.target() == pytest.approx(250) and pc.behind() and pc.floor == 750_000
     floors = []
-    for _ in range(6):
+    for _ in range(8):
         pc.update()
         floors.append(pc.floor)
         t["now"] += 61
-    assert floors[:4] == [250_000, 100_000, 50_000, 25_000] and pc.widen
+    assert floors[:6] == [250_000, 100_000, 50_000, 25_000, 10_000, 5_000] and pc.widen
     n = sum(pc.allow_fill() for _ in range(30))
     assert n == 10                                                      # PACE_FILL_PER_MIN
     t["now"] += 61
@@ -196,7 +197,7 @@ def test_projection(tmp_path):
     t["now"] += 3600 - 1
     assert pc.projection() == 10                                         # behind, no fills working: honest base
     pc.allow_fill()
-    assert pc.projection() == 500                                        # fills working toward the minimum
+    assert pc.projection() == 10                  # v1.1.3: fills alone no longer claim the minimum is reached
     db.close()
 
 
@@ -256,3 +257,25 @@ def test_widened_discovery_uses_more_free_sources(tmp_path):
     asyncio.run(u.discover_once())
     assert normal == 4 and len(calls) == 4 * 3 + 3                     # 4 GT lists x 3 pages + 3 DexScreener lists
     assert any("new_pools" in c[1] for c in calls) and any("token-profiles/latest" in c[1] for c in calls)
+
+
+def test_v113_far_behind_jumps_to_lowest_floor_and_honest_projection(tmp_path):
+    db, t, c, pc = pace_at(tmp_path, MID + 12 * 3600, used=20)          # noon: target 250, 230 behind
+    pc.update()
+    assert pc.floor == 5_000 and pc.widen and pc.stats["floor_jump"] == 1   # no 1-tier-per-minute ramp
+    for i in range(60):                                  # 60 admissions in the last hour (the first 20 are older)
+        t["now"] += 61
+        c.admit(f"y{i}")
+    left_h = (MID + 86400 - t["now"]) / 3600
+    assert pc.rate_per_h() == 60 and pc.projection() == int(80 + 60 * left_h)
+    db.close()
+
+
+def test_v113_recent_admissions_survive_restart(tmp_path):
+    db, t, c, pc = pace_at(tmp_path, MID + 12 * 3600, used=0)
+    for i in range(30):
+        t["now"] += 60
+        c.admit(f"z{i}")
+    c2 = DailyCap(db, 1000, clock=lambda: t["now"])
+    assert c2.used == 30 and len(c2.recent) == 30
+    db.close()
