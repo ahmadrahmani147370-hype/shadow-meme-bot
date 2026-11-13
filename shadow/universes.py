@@ -224,21 +224,32 @@ class UniverseCollector:
         pages = self.s.universe_gt_pages + (WIDE_EXTRA_PAGES if wide else 0)
         if wide:
             self.stats["discover_wide"] += 1
-        for path, extra in lists:
-            for page in range(1, pages + 1):
-                data = await self._get("geckoterminal", GT_BASE + path,
-                                       {"page": page, "include": "base_token", **extra})
-                for p in parse_gt_pools(data):
-                    reason = meme_filter(p["mint"], p["symbol"], p["name"], p["price"], self.s.universe_allow_majors,
-                                         self.extra_exclude)
-                    if reason:
-                        self.filtered[reason] += 1
-                    else:
-                        found.append(p["mint"])
-        boosts = await self._get("dexscreener_profiles", DS_BOOSTS_TOP)
-        found += parse_ds_boosts(boosts)
+        if not (self.members.get(U_MCAP) or self.members.get(U_VOLUME)):
+            # v1.2: after a restart re-rank the known candidates at once (recent members + new launches >= the MCAP
+            # floor) instead of leaving the MCAP / TOP VOLUME universes empty until the slow GeckoTerminal pass ends
+            for (m,) in self.db.con.execute("SELECT mint FROM universe_members WHERE universe IN (?,?) AND last_ts>=?",
+                                            (U_MCAP, U_VOLUME, now - 6 * 3600)):
+                self.candidates.setdefault(m, now)
+            await self.validate_once()
+        # DexScreener lists first (own rate limit), then GeckoTerminal
+        found += parse_ds_boosts(await self._get("dexscreener_profiles", DS_BOOSTS_TOP))
         for url in DS_ALWAYS + tuple(u for u in (DS_WIDE if wide else ()) if u not in DS_ALWAYS):
             found += parse_ds_boosts(await self._get("dexscreener_profiles", url))
+        # page 1 of every list first (then validate), deeper pages after - members appear within ~1 minute
+        order = [(page, path, extra) for page in range(1, pages + 1) for path, extra in lists]
+        for k, (page, path, extra) in enumerate(order):
+            if page == 2 and order[k - 1][0] == 1:
+                for m in found:
+                    self.candidates[m] = now
+                await self.validate_once()
+            data = await self._get("geckoterminal", GT_BASE + path, {"page": page, "include": "base_token", **extra})
+            for p in parse_gt_pools(data):
+                reason = meme_filter(p["mint"], p["symbol"], p["name"], p["price"], self.s.universe_allow_majors,
+                                     self.extra_exclude)
+                if reason:
+                    self.filtered[reason] += 1
+                else:
+                    found.append(p["mint"])
         for m in found:
             self.candidates[m] = now
         # keep the candidate pool bounded: members first, then most recently seen

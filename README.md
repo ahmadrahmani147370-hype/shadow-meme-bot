@@ -252,6 +252,8 @@ What changed (paper only; $1M mcap floor, $50k liquidity, SL -20%, TP +1000% + t
   versions (`migrate_v120`) plus a new judge version.
 * Discovery: GeckoTerminal 3 pages per list (was 1) plus trending 1h / 6h lists, DexScreener latest boosts and profiles on
   every run (they were only used while behind pace).
+  After a restart the MCAP / TOP VOLUME universes are re-ranked at once from recent members, and again after page 1 of
+  every list, so they no longer sit empty for minutes during the slower 3-page GeckoTerminal pass.
 
 Dashboard (GitHub Pages, `docs/`): dark teal/cyan glass redesign. It has a hooded avatar, LIVE / PAPER ONLY pills, 4 stat cards,
 Solana + universe chips, a Paper Equity card (real equity curve with a $ y-axis), Rugs Blocked / Trades Executed cards with
