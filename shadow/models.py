@@ -13,6 +13,12 @@ MIGRATED = "migrated"    # graduated to an AMM pool (pumpswap / raydium / meteor
 AMM = "amm"              # first seen directly on an AMM pool (no launchpad seen)
 UNKNOWN = "unknown"
 
+# Token universes (phase 4 adds the column everywhere; mcap/volume collectors arrive in phase 5)
+U_NEW = "new"          # fresh launches from the scanner (<= MAX_TOKEN_AGE_MIN)
+U_MCAP = "mcap"        # any Solana meme coin with market cap >= $1M
+U_VOLUME = "volume"    # highest 24h / 1h volume Solana meme coins
+UNIVERSES = (U_NEW, U_MCAP, U_VOLUME)
+
 
 @dataclass
 class TokenEvent:
@@ -78,6 +84,7 @@ class MarketData:
     n_pairs: int = 0
     source: str = "dexscreener"
     updated_ts: float = 0.0
+    universe: str = U_NEW
 
     def age_min(self, now: float | None = None) -> float | None:
         if not self.launch_ts:

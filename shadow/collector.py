@@ -24,12 +24,15 @@ from dataclasses import dataclass, field, replace
 from .candles import CandleBuilder, parse_gt_ohlcv
 from .config import Settings
 from .db import Database
-from .models import AMM, BONDING, MIGRATED, MIGRATION, UNKNOWN, Candle, MarketData, TokenEvent
+from .models import AMM, BONDING, MIGRATED, MIGRATION, NEW_TOKEN, UNKNOWN, Candle, MarketData, TokenEvent
 from .net import UA, RateLimitError, fetch_json, make_limiters
 from .scanner import QUOTE_MINTS
 
 PHASE = 3
 IMPLEMENTED = True
+# Budget at MAX_TRACKED=200 (keyless): DexScreener 7 calls / 15 s snapshot = 28/min + enrichment <= 12/min
+# (limit 300/min); Jupiter price fill-in 4 calls / 60 s (limit 30/min, shared with phase-4 quotes);
+# GeckoTerminal hot set 3 pools / 90 s = 2/min (limit ~10/min, shared with the scanner's 3/min).
 log = logging.getLogger("shadow.collector")
 
 DS_TOKENS = "https://api.dexscreener.com/tokens/v1/solana/"
@@ -38,7 +41,9 @@ GT_OHLCV = "https://api.geckoterminal.com/api/v2/networks/solana/pools/{pool}/oh
 DS_BATCH = 30
 JUP_BATCH = 50
 # DexScreener dexIds of launchpad bonding curves (everything else is an AMM pool)
-DS_BONDING = {"pumpfun", "meteoradbc", "launchlab", "raydiumlaunchlab", "moonshot", "boop", "believe", "heaven"}
+# "bags" = Bags launchpad on Meteora DBC (no liquidity field, later gets a meteora damm-v2 pair; verified phase 4)
+DS_BONDING = {"pumpfun", "meteoradbc", "launchlab", "raydiumlaunchlab", "moonshot", "boop", "believe", "heaven", "bags"}
+DEFERRED_MAX = 1000
 
 
 # ---------------------------------------------------------------- pure helpers (unit-tested)
@@ -140,6 +145,7 @@ class Collector:
         self.on_enriched, self.on_stop = on_enriched, on_stop
         self.pending: dict[str, Pending] = {}
         self.tracked: dict[str, Tracked] = {}
+        self.deferred: dict[str, MarketData] = {}   # tracking_full tokens, re-checked when slots free up
         self.stats: Counter = Counter()
         self.drops: Counter = Counter()
         self.errors: deque = deque(maxlen=50)
@@ -175,7 +181,8 @@ class Collector:
         return list(self.tracked)
 
     def snapshot(self) -> dict:
-        return {"pending": len(self.pending), "tracked": len(self.tracked), **dict(self.stats),
+        return {"pending": len(self.pending), "tracked": len(self.tracked), "deferred": len(self.deferred),
+                **dict(self.stats),
                 "drops": dict(self.drops), "last_errors": list(self.errors)[-5:]}
 
     # ---- intake
@@ -187,6 +194,8 @@ class Collector:
                 self.tracked[ev.mint].market.migration_status = MIGRATED
                 self.stats["migrations_tracked"] += 1
             return
+        if ev.mint in self.deferred and ev.kind == MIGRATION:
+            self.deferred[ev.mint].migration_status = MIGRATED
         if ev.mint in self.pending:
             if ev.kind == MIGRATION:
                 self.pending[ev.mint].ev.status = MIGRATED
@@ -231,6 +240,7 @@ class Collector:
     # ---- enrichment
     async def enrich_once(self) -> int:
         now = self.clock()
+        self.requeue_deferred(now)
         due = [m for m, p in self.pending.items() if p.next_ts <= now][:DS_BATCH]
         if not due:
             return 0
@@ -303,8 +313,12 @@ class Collector:
                 self.stop_tracking(weakest.market.mint, "evicted")
             else:
                 self.drops["tracking_full"] += 1
-                self.db.add_drop(md.mint, "tracking_full", f"vol_m5 {md.vol_m5:.0f}")
+                self.db.add_drop(md.mint, "tracking_full", f"vol_m5 {md.vol_m5:.0f} (deferred, re-checked later)")
+                self.deferred[md.mint] = md
+                while len(self.deferred) > DEFERRED_MAX:
+                    self.deferred.pop(next(iter(self.deferred)))
                 return False
+        self.deferred.pop(md.mint, None)
         b = CandleBuilder(md.mint)
         b.add(now, md.price_usd, md.vol_h24, md.buys_h24, md.sells_h24)
         self.tracked[md.mint] = Tracked(md, b, last_active_ts=now, last_txns=md.txns_h24, started_ts=now)
@@ -313,6 +327,31 @@ class Collector:
         self.stats["snapshots"] += 1
         self.db.add_snapshots([self._snap_row(md, now, "dexscreener")])
         return True
+
+    def requeue_deferred(self, now: float | None = None) -> int:
+        """Slots free again: send the most active deferred (tracking_full) tokens back to enrichment,
+        as long as they are still younger than MAX_TOKEN_AGE_MIN."""
+        if not self.deferred:
+            return 0
+        now = now or self.clock()
+        for m, md in list(self.deferred.items()):
+            age = md.age_min(now)
+            if age is not None and age > self.s.max_token_age_min:
+                self.deferred.pop(m)
+                self.stats["deferred_expired"] += 1
+        free = self.s.max_tracked - len(self.tracked) - sum(1 for p in self.pending.values() if p.enriched)
+        if free <= 0:
+            return 0
+        best = sorted(self.deferred.values(), key=lambda md: md.vol_m5, reverse=True)[:free]
+        for md in best:
+            self.deferred.pop(md.mint, None)
+            if md.mint in self.pending or md.mint in self.tracked:
+                continue
+            ev = TokenEvent(NEW_TOKEN, md.mint, "requeue", name=md.name, symbol=md.symbol, launch_ts=md.launch_ts,
+                            status=md.migration_status)
+            self.pending[md.mint] = Pending(ev, now, enriched=True)
+        self.stats["requeued_from_full"] += len(best)
+        return len(best)
 
     @staticmethod
     def _snap_row(md: MarketData, now: float, source: str) -> tuple:
@@ -336,7 +375,7 @@ class Collector:
         if not self.tracked:
             return 0
         now = self.clock()
-        rows, finished, missing = [], [], []
+        rows, finished, missing, mds = [], [], [], []
         for chunk in chunks(list(self.tracked), DS_BATCH):
             pairs = await self._ds_fetch(chunk)
             if pairs is None:
@@ -366,8 +405,9 @@ class Collector:
                 t.last_txns = md.txns_h24
                 rows.append(self._snap_row(md, now, "dexscreener"))
                 finished += t.builder.add(now, md.price_usd, md.vol_h24, md.buys_h24, md.sells_h24)
-                self.db.upsert_market(md, tracking=True)
+                mds.append(md)
                 self._emit(md)
+        self.db.upsert_markets(mds, tracking=True)
         self.db.add_snapshots(rows)
         self.db.upsert_candles(finished)
         self.stats["snapshots"] += len(rows)
@@ -460,7 +500,8 @@ class Collector:
 
     # ---- maintenance
     def cleanup(self) -> dict:
-        out = self.db.cleanup(self.s.snapshot_retention_h, self.s.candle_retention_h)
+        out = self.db.cleanup(self.s.snapshot_retention_h, self.s.candle_retention_h, self.s.market_retention_d,
+                              self.s.seen_retention_d)
         self.stats["cleanup_runs"] += 1
         return out
 

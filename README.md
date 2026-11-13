@@ -7,19 +7,19 @@ Solana meme coin scanner + **paper-trading** signal bot in Python, built for **A
 > private key, ever. `PAPER_ONLY` is a constant in the code; `.env` cannot turn it off.
 > Signals are not financial advice, and the bot reports only results it actually measured.
 
-## Status: Phase 3 of 10 ✅ (data collection)
+## Status: Phase 4 of 10 ✅ (coin safety checker)
 
 | Phase | What | Status |
 |---|---|---|
 | 1 | Termux installation, config, doctor, verified data sources | ✅ done |
 | 2 | Token scanner (PumpPortal stream + fallbacks) | ✅ done |
 | 3 | Data collection (price, mcap, liquidity, volume, buys/sells) | ✅ done |
-| 4 | Coin safety checker | ⏳ next |
-| 5 | Signal engine + 3 strategies + 0-100 score | ⏳ |
+| 4 | Coin safety checker (strict) | ✅ done |
+| 5 | Signal engine + strategies + judge agent + MCAP / TOP VOLUME universes | ⏳ next |
 | 6 | Paper trading engine ($100, $2/trade, $0.50+$0.50 fees, max 5 open) | ⏳ |
 | 7 | SQLite database (positions survive restarts) | ⏳ |
 | 8 | Telegram commands, alerts, daily report | ⏳ |
-| 9 | Dashboard / performance report | ⏳ |
+| 9 | Dashboard (Telegram Mini App on GitHub Pages) + self-improving strategies | ⏳ |
 | 10 | Complete testing | ⏳ |
 
 Files for later phases exist as clearly marked stubs (`PHASE = N`, `IMPLEMENTED = False`).
@@ -40,7 +40,8 @@ python -m shadow.doctor
 ```
 
 4. Android: **Settings → Apps → Termux → Battery → Unrestricted**, otherwise Android kills it in the background.
-5. Try the scanner (phase 2): `python main.py --debug scan 120`, and the collector (phase 3): `python main.py --debug collect 300`
+5. Try the scanner (phase 2): `python main.py --debug scan 120`, the collector (phase 3): `python main.py --debug collect 300`,
+   and the safety checker (phase 4): `python main.py --debug safety <mint>` or `python main.py --debug safety-live 300`
 6. From phase 8: `nano .env` (Telegram token + chat id), then `./start.sh`.
 
 **Telegram bot:** SHADOW MEME will use the existing **@Fathersigna147lBot** with owner chat id
@@ -67,6 +68,7 @@ pkg install -y git python && git clone https://github.com/ahmadrahmani147370-hyp
 4. Phone ki Settings → Apps → Termux → Battery → **Unrestricted** kar dein, warna Android background mein band kar deta hai.
 5. Scanner test karein (phase 2): `python main.py --debug scan 120` — 2 minute tak naye coins aur migrations screen par aayenge, aakhir mein ginti.
    Collector test (phase 3): `python main.py --debug collect 300` — har coin ki price, market cap, liquidity, volume aur buys/sells, aur 1-minute candles. Aakhir mein batata hai kitne coins track hue, kitne kis wajah se chhore gaye, har API ko kitni calls gayin, aur CPU/RAM kitni lagi.
+   Safety test (phase 4): `python main.py --debug safety <mint>` — ek coin ki poori safety report (mint/freeze authority, Token-2022, holders, insiders, dev, liquidity, fake volume, Jupiter par bechne ka test). `python main.py --debug safety-live 300` — 5 minute tak har naye coin ki report, aakhir mein kitne pass/reject hue aur kis wajah se.
 6. Phase 8 ke baad: `nano .env` mein Telegram token aur chat id likhein, phir `./start.sh`.
 
 Scanner do tarah se coins dhoondta hai: PumpPortal websocket (live) aur GeckoTerminal + RugCheck polling. Test mein websocket ne sirf ~19% naye pump.fun coins diye, is liye polling hamesha on rehti hai. Ek coin dobara nahi aata, restart ke baad bhi nahi.
@@ -74,6 +76,18 @@ Scanner do tarah se coins dhoondta hai: PumpPortal websocket (live) aur GeckoTer
 Agar doctor mein `telegram_api` par **ConnectTimeout** aaye (Pakistan ke kuch networks par Telegram block hota hai): doosra network (Wi-Fi ya doosri SIM) try karein, ya muft **1.1.1.1 (WARP)** app on karein. Advanced: `.env` mein `TELEGRAM_API_BASE` apne HTTPS mirror par set karein. Ye phase 8 se zaroori hoga.
 
 Telegram ke liye purana **@Fathersigna147lBot** hi use hoga (chat id `7922990181`). Ek token ek waqt mein sirf ek program chala sakta hai, is liye FATHER bot band hona chahiye.
+
+**Safety checker (phase 4) – Roman Urdu:** har coin ko 0-100 safety score milta hai. Kuch khatre
+"CRITICAL" hain — inme se ek bhi ho to coin foran reject, score chahe jitna ho: mint ya freeze
+authority on, khatarnak Token-2022 settings (transfer fee, permanent delegate, transfer hook, frozen,
+pause — ya koi authority jo baad mein fee/hook laga sake), rugged, liquidity ya price achanak gir
+jaye (rug warning), Jupiter par bech na sakein ya $2 bechne par 15% se zyada price impact ya 25% se
+zyada nuqsan, ek wallet ke paas 30% ya top 10 ke paas 60% se zyada (pools aur pump.fun ka mayhem
+wallet shamil nahi), insiders ke paas 25% se zyada, dev ke paas 20% se zyada, creator ke purane
+coins rug hue hon ya wo blacklist mein ho, ek creator ne 24 ghante mein 10+ coins banaye hon,
+liquidity $1,500 se kam, wash (jaali) volume, ya bohat trades lekin chand holders. RugCheck report
+na mile to faisla UNKNOWN — aise coin par kabhi trade nahi hoga. Sab hadd `.env` mein badal sakte
+hain (`SAFETY_...`). Default ab sakht (strict) hain: score 70 se kam = reject. `MAX_TRACKED` ab 200 hai.
 
 Yaad rakhein: ye bot **sirf paper trading** karta hai. Na wallet, na private key, na asli paisa.
 Phone par 24 ghante lagatar chalne ki guarantee nahi — Android, battery aur network kabhi bhi rok sakte hain.
@@ -116,8 +130,10 @@ python main.py --debug collect 300     # scanner + collector live for 5 minutes
   default 120), `no_pair` (no DexScreener pair after `NO_PAIR_TTL_SEC`, default 300 s, re-tried
   10 s → 60 s), `not_meme` (only paired against non-SOL/USDC/USDT tokens, e.g. tokenized stocks or
   pair spam), `inactive` (fewer than `MIN_TRACK_TXNS` trades by the TTL), `tracking_full`.
-- **Tracking:** at most `MAX_TRACKED` (40) tokens, a snapshot every `SNAPSHOT_SEC` (15 s). A busier
-  token can push out the quietest one after `MIN_HOLD_SEC`. Tracking stops when a token is older
+- **Tracking:** at most `MAX_TRACKED` (200) tokens, a snapshot every `SNAPSHOT_SEC` (15 s) = 7
+  DexScreener batch calls per snapshot. A busier token can push out the quietest one after
+  `MIN_HOLD_SEC`; a token turned away while all slots are full (`tracking_full`) is kept in a
+  backlog and re-checked when a slot frees up, as long as it is still younger than the max age. Tracking stops when a token is older
   than the max age (`aged_out`), has no trades for `DEAD_AFTER_MIN` (`dead`), or its pair vanishes
   (`lost`). Tracked tokens resume after a restart.
 - **Candles:** 1-minute OHLCV built locally from snapshots. Volume and buy/sell counts are deltas of
@@ -126,10 +142,60 @@ python main.py --debug collect 300     # scanner + collector live for 5 minutes
 - **Extras:** GeckoTerminal 1-minute OHLCV for the `HOT_SIZE` (3) busiest tokens every 90 s;
   Jupiter price v3 fills liquidity (DexScreener has none for pump.fun bonding pairs) and is the
   price fallback when a pair is missing.
-- **Retention:** snapshots 6 h, candles 48 h, untracked market rows and drops 7 days, seen tokens
-  14 days (cleanup every 10 minutes).
+- **Retention:** snapshots 3 h, candles 6 h, untracked market rows and drops 2 days, seen tokens
+  2 days, safety reports 3 h after a token stops being tracked, RugCheck cache 1 h (cleanup every
+  10 minutes). Estimated steady state at 200 tracked tokens: roughly 100 MB of SQLite.
+- **Bags** (`dexId` `bags`, Meteora DBC) is treated as a bonding launchpad like pump.fun.
 - **Interface for phases 4/5:** `collector.get_market(mint)`, `collector.get_candles(mint, minutes=60)`,
   `collector.candles_df(mint)`, `collector.tracked_mints()`, `collector.updates` (queue).
+
+## Coin safety checker (phase 4)
+
+```bash
+python main.py --debug safety <mint>        # full report for one token incl. a Jupiter sell quote
+python main.py --debug safety-live 300      # scanner + collector + safety for 5 minutes, with counts
+```
+
+Each tracked token gets a **SafetyReport**: a 0-100 safety sub-score, flags with severity
+(`info` / `warn` −5 / `danger` −15 / `critical`) and a verdict `PASS`, `REJECT` or `UNKNOWN`.
+Defaults are **strict**: score below `SAFETY_MIN_SCORE` (70) = reject, and **any critical flag rejects
+whatever the score**. No RugCheck report = `UNKNOWN`, which is never tradable.
+
+| Check | Source | Critical when |
+|---|---|---|
+| Mint / freeze authority | Solana RPC `getMultipleAccounts` (100 mints per call), publicnode fallback, RugCheck copy as last fallback | either is still set |
+| Token-2022 extensions | same RPC call | transfer fee > 0, fee authority, permanent delegate, non-transferable, transfer hook (or hook authority), default frozen, pausable |
+| Holders | RugCheck full report (cached 15 min) with pools, lockers, bonding curves and the pump.fun *mayhem* wallet excluded | top-1 ≥ 30% or top-10 ≥ 60% |
+| Insiders / clusters | RugCheck `insiderNetworks`, insider holders | insiders ≥ 25% (cluster of 10+ wallets = warn) |
+| Dev wallet | RugCheck creator + balance, scanner dev buy, tokens per creator in 24 h, learned blacklist | dev holds ≥ 20%, creator has rugged tokens, blacklisted creator, 10+ tokens in 24 h |
+| Liquidity | DexScreener / Jupiter (collector) or RugCheck | below $1,500 (new launches) or $10k (mcap / volume universes) |
+| Fake volume | collector buys/sells/volume/liquidity + RugCheck holders | 1 h volume ≥ 100× liquidity, or 150+ trades with fewer than 20 holders |
+| Rug pull warning | price snapshots + DexScreener h1 change | liquidity −50% or price −80% from peak, or −70% in 1 h |
+| Sellability | Jupiter `swap/v1/quote` token → SOL for `PAPER_TRADE_SIZE` | no route, impact ≥ 15%, or more than 25% of the value lost |
+| RugCheck | `rugged` flag; "creator history of rugged tokens"; other danger risks | rugged / creator history |
+
+Budget at 200 tracked tokens (all keyless): RugCheck reports ≤ `SAFETY_RC_PER_MIN` (30/min; the
+scanner adds ~10/min), Jupiter quotes ≤ `SAFETY_QUOTES_PER_MIN` (8/min, only for passing, active
+tokens until phase 5 asks for quotes near a signal), RPC ~5/min. New tokens are checked first, then
+expired reports, busiest first. Re-checks: every 15 min, rejected tokens every 30 min, quotes valid
+3 min. All thresholds are in `.env` (`SAFETY_...`).
+
+**Interface for phase 5:** `checker.check(mint, quote=True)`, `checker.get_report(mint)`,
+`report.trade_ready(quote_ttl)` (PASS + fresh sellable quote), `checker.request_quote(mint)`.
+
+**Prepared for the next phases:** every table that holds tokens has a `universe` column
+(`new` / `mcap` / `volume`) and `universe_members` records that one coin can sit in several lists
+(e.g. MCAP ≥ $1M *and* TOP VOLUME). The safety checker already uses stricter liquidity floors for the
+`mcap` / `volume` universes. Reports are stored with every flag, severity and penalty, so the phase 5
+judge agent can cite exact reasons when it vetoes a signal, and phase 9's self-tuning can compare
+safety flags against closed paper-trade results.
+
+**10-minute live test at MAX_TRACKED=200 (13 Nov 2026, 08:30–08:40 PKT):** 255 tokens checked,
+90 passed, 165 rejected (by critical reason: creator history of rugged tokens 127, serial creator 124,
+liquidity below the floor 86, rug warning 34, extreme holder concentration 8, wash volume 5, extreme
+insiders 2, few makers 2; low score only 2). Tracking reached the 200 cap after ~8 minutes. API
+calls per minute: DexScreener 29, RugCheck 33 (scanner + safety), Jupiter 9.5, GeckoTerminal 4.4,
+RPC 5.3; **zero 429s, zero errors**. CPU 0.7% average, RSS 51 MB, SQLite +3.7 MB in 10 minutes.
 
 ## Doctor (self-check)
 
@@ -163,7 +229,7 @@ and Birdeye needs a key, so neither is required.
 ## Project layout
 
 ```
-main.py                 entry point (bot from phase 8; --debug doctor / scan / collect now)
+main.py                 entry point (bot from phase 8; --debug doctor / scan / collect / safety now)
 shadow/__init__.py      version + PAPER_ONLY constant
 shadow/config.py        .env loading, safe defaults, paper-only guard
 shadow/doctor.py        self-check
@@ -176,12 +242,16 @@ shadow/net.py           rate-limit queues + JSON fetch
 shadow/collector.py     phase 3: enrichment, age filter, tracking, snapshots, hot set
 shadow/candles.py       1-minute candle builder + GeckoTerminal OHLCV parser
 shadow/collect_cli.py   `--debug collect` live printer
-shadow/safety.py        phase 4 stub    shadow/signals.py    phase 5 stub
+shadow/safety.py        phase 4: SafetyChecker, SafetyReport, strict rules
+shadow/safety_cli.py    `--debug safety` / `safety-live` printers
+shadow/signals.py       phase 5 stub
 shadow/strategies.py    phase 5 stub    shadow/paper.py      phase 6 stub
-shadow/db.py            SQLite schema v2: seen_tokens, token_market, price_snapshots, candles_1m, drops
+shadow/db.py            SQLite schema v3: seen_tokens, token_market, price_snapshots, candles_1m, drops,
+                        safety_reports, rugcheck_cache, creator_blacklist, universe_members
+                        (+ `universe` column: new / mcap / volume)
 shadow/telegram_bot.py  phase 8 stub
 shadow/dashboard.py     phase 9 stub
-tests/                  pytest (config, doctor, scanner, collector; recorded responses in tests/fixtures/)
+tests/                  pytest (config, doctor, scanner, collector, safety; recorded responses in tests/fixtures/)
 docs/DATA_SOURCES.md    tested data sources
 setup_termux.sh  start.sh  .env.example  requirements.txt  requirements-dev.txt
 ```

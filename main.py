@@ -5,6 +5,8 @@
     python main.py --debug doctor --offline
     python main.py --debug scan [seconds] [fallback]   # live scanner test (phase 2)
     python main.py --debug collect [seconds]           # scanner + collector live test (phase 3)
+    python main.py --debug safety <mint>               # full safety check of one token (phase 4)
+    python main.py --debug safety-live [seconds]       # scanner + collector + safety live test (phase 4)
 
 Exit codes: 0 ok, 1 doctor found a FAIL, 2 config error, 3 feature not built yet (start.sh stops on 2 and 3).
 """
@@ -19,7 +21,8 @@ from shadow.config import load_settings
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=f"SHADOW MEME {__version__} (paper-only)")
-    ap.add_argument("--debug", nargs="+", metavar="CMD", help="debug tools: doctor [offline] [json] | scan [seconds] [fallback] | collect [seconds]")
+    ap.add_argument("--debug", nargs="+", metavar="CMD", help="debug tools: doctor [offline] [json] | scan [seconds] [fallback] | collect [seconds] | "
+                         "safety <mint> | safety-live [seconds]")
     a = ap.parse_args(argv)
 
     if a.debug:
@@ -51,6 +54,25 @@ def main(argv: list[str] | None = None) -> int:
             secs = next((float(x) for x in rest if x.replace(".", "", 1).isdigit()), 300.0)
             try:
                 asyncio.run(run_collect(load_settings(), secs, quiet="quiet" in rest))
+            except KeyboardInterrupt:
+                pass
+            return 0
+        if cmd in ("safety", "safety-live"):
+            import asyncio
+            import logging
+
+            from shadow.safety_cli import run_safety_live, run_safety_one
+
+            logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+            try:
+                if cmd == "safety":
+                    mints = [x for x in rest if len(x) >= 32]
+                    if not mints:
+                        print("usage: python main.py --debug safety <mint>")
+                        return 2
+                    return asyncio.run(run_safety_one(load_settings(), mints[0]))
+                secs = next((float(x) for x in rest if x.replace(".", "", 1).isdigit()), 300.0)
+                asyncio.run(run_safety_live(load_settings(), secs, quiet="quiet" in rest))
             except KeyboardInterrupt:
                 pass
             return 0

@@ -170,7 +170,7 @@ def test_main_py_debug_doctor(monkeypatch, tmp_settings, no_pkg_check):
 
 def test_stubs_are_marked():
     import importlib
-    for mod, ph in [("safety", 4), ("signals", 5), ("strategies", 5),
+    for mod, ph in [("signals", 5), ("strategies", 5),
                     ("paper", 6), ("telegram_bot", 8), ("dashboard", 9)]:
         m = importlib.import_module(f"shadow.{mod}")
         assert m.PHASE == ph and m.IMPLEMENTED is False

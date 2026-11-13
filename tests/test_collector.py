@@ -369,7 +369,7 @@ def test_schema_upgrade_v1_to_v2_keeps_seen_tokens(tmp_path):
     con.commit()
     con.close()
     db = Database(p)
-    assert db.version == SCHEMA_VERSION == 2 and db.is_seen("KEEP")
+    assert db.version == SCHEMA_VERSION == 3 and db.is_seen("KEEP")
     assert db.table_counts()["candles_1m"] == 0
 
 
@@ -390,3 +390,27 @@ def test_submit_migration_updates_tracked(env):
     c.tracked["T"] = co.Tracked(MarketData("T", migration_status=BONDING), CandleBuilder("T"), last_active_ts=NOW)
     c.submit(TokenEvent(MIGRATION, "T", "pumpportal", status=MIGRATED))
     assert c.tracked["T"].market.migration_status == MIGRATED and c.stats["migrations_tracked"] == 1
+
+
+# ---------------------------------------------------------------- phase 4 collector changes
+def test_bags_is_a_bonding_launchpad():
+    # Bags launches on Meteora DBC: dexId "bags" without liquidity, then a meteora damm-v2 pair after migrating
+    assert co.derive_status([{"dexId": "bags"}]) == BONDING
+    assert co.derive_status([{"dexId": "bags"}, {"dexId": "meteora"}]) == MIGRATED
+
+
+def test_default_max_tracked_is_200():
+    assert load_settings(env={}).max_tracked == 200
+
+
+def test_tracking_full_is_deferred_and_requeued_when_a_slot_frees(env):
+    clock = Clock()
+    c, db, log = env(clock=clock, max_tracked=2, min_hold_sec=120)
+    mk = lambda m, v, launch=NOW: MarketData(m, vol_m5=v, launch_ts=launch, buys_h24=10)  # noqa: E731
+    assert c._start_tracking(mk("A", 10), NOW) and c._start_tracking(mk("B", 20), NOW)
+    assert not c._start_tracking(mk("C", 5), NOW) and not c._start_tracking(mk("OLD", 9, NOW - 7000), NOW)
+    assert set(c.deferred) == {"C", "OLD"} and c.requeue_deferred(NOW) == 0   # no free slot yet
+    c.stop_tracking("A", "dead")
+    assert c.requeue_deferred(NOW + 300) == 1                                  # OLD aged out (>120 min)
+    assert "C" in c.pending and c.pending["C"].enriched and not c.deferred
+    assert c.stats["deferred_expired"] == 1 and c.stats["requeued_from_full"] == 1

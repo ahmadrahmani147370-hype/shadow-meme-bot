@@ -63,6 +63,41 @@ Other observations:
   since launch, so snapshot deltas give exact per-minute volume and buys/sells.
 - 5.5-minute live run: 103 DexScreener, 25 GeckoTerminal, 41 RugCheck and 8 Jupiter calls, zero 429s.
 
+## Phase 4 findings (13 Nov 2026, 08:00–08:45 PKT)
+
+- **RPC `getMultipleAccounts` jsonParsed works on the public mainnet RPC** (100 mints per call), so
+  authority + Token-2022 checks for 200 tokens cost a few calls per minute.
+- **pump.fun "mayhem" wallet:** `BwWK17cbHxwWBKZkUYvzxLcNQ1YVyaFezduWbtm2de6s` (owned by the System
+  Program, ~69k SOL) holds ~50% of every 2B-supply pump.fun token. RugCheck reports it as "Single holder
+  ownership"; the checker excludes it from holder concentration (and adds a small warn flag).
+- RugCheck lists bonding curves / AMM vaults in `knownAccounts` (type AMM / LOCKER) and in `markets`
+  (pubkey, liquidityA/B); those holders are excluded too.
+- **Bags** (`dexId` `bags`) is a Meteora DBC launchpad: no liquidity field on DexScreener, RugCheck
+  `launchpad.platform = meteora_dbc`, later a Meteora DAMM v2 pair. Added to the bonding set.
+- Jupiter `liquidity` for a fresh pump.fun bonding token is the real SOL in the curve and is often
+  near $0 right after launch; the strict liquidity floor rejects those.
+- RugCheck currently answers HTTP 400 `{"error":"unable to generate report"}` for BONK (2M+ holders)
+  while smaller tokens work; the doctor now probes JUP instead. A token without a report gets the
+  verdict UNKNOWN (never tradable).
+- Jupiter quote with no route answers HTTP 400 `{"errorCode":"NO_ROUTES_FOUND"}` (recorded fixture).
+- In the 10-minute live test, half of all new tokens came from creators RugCheck marks with a
+  "Creator history of rugged tokens" risk; with strict defaults that alone rejects them.
+- Free sources for the phase 5 universes, checked today (HTTP 200): GeckoTerminal
+  `networks/solana/trending_pools` and `networks/solana/pools?sort=h24_volume_usd_desc` (20 pools per
+  page; includes SOL/USDC and stablecoin pools that must be filtered out), DexScreener
+  `token-boosts/top/v1` (30 items, 26 on Solana). DexScreener `latest/dex/search` returns noisy
+  results and is not useful for "all coins above $1M".
+
+## Measured budget at MAX_TRACKED=200 (10-minute live test)
+
+| Source | Calls/min measured | Keyless limit | 429s |
+|---|---|---|---|
+| DexScreener | 29.0 | 300 | 0 |
+| RugCheck (scanner + safety) | 33.1 | ~60–180 | 0 |
+| Jupiter (price fill-in + quotes) | 9.5 | 30 | 0 |
+| GeckoTerminal (scanner + hot set) | 4.4 | ~10 | 0 |
+| Solana RPC | 5.3 | ~50 per window | 0 |
+
 ## Source plan for phases 2–4
 
 | Need | Primary | Fallback |

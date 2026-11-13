@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass, field
 
 log = logging.getLogger("shadow.net")
-UA = "ShadowMeme/0.2 (+https://github.com/ahmadrahmani147370-hype/shadow-meme-bot)"
+UA = "ShadowMeme/0.4 (+https://github.com/ahmadrahmani147370-hype/shadow-meme-bot)"
 
 
 class RateLimitError(Exception):
@@ -61,11 +61,12 @@ class RateLimiter:
 # Budgets kept safely under the documented keyless limits.
 DEFAULT_BUDGETS = {
     "geckoterminal": 6,      # docs ~10/min
-    "rugcheck": 30,          # docs ~1-3 req/s
+    "rugcheck": 50,          # docs ~1-3 req/s (scanner polls 10/min, safety reports <= SAFETY_RC_PER_MIN)
     "dexscreener": 240,      # tokens/pairs 300/min
     "dexscreener_profiles": 50,
     "jupiter": 25,           # keyless 30/min
     "solana_rpc": 60,
+    "solana_rpc_fallback": 60,
 }
 
 
@@ -88,3 +89,25 @@ async def fetch_json(client, limiter: RateLimiter, url: str, *, params=None, hea
     r.raise_for_status()
     limiter.success()
     return r.json()
+
+
+async def request_raw(client, limiter: RateLimiter, method: str, url: str, *, params=None, json_body=None,
+                      headers=None) -> tuple[int, object]:
+    """Like fetch_json but returns (status, parsed body) for any non-429 status, so callers can read
+    4xx error bodies (e.g. Jupiter "No routes found"). Raises RateLimitError on 429."""
+    await limiter.acquire()
+    if method == "POST":
+        r = await client.post(url, json=json_body, headers=headers)
+    else:
+        r = await client.get(url, params=params, headers=headers)
+    if r.status_code == 429:
+        ra = r.headers.get("retry-after")
+        limiter.penalize(float(ra) if ra and ra.replace(".", "", 1).isdigit() else None)
+        raise RateLimitError(f"{limiter.name} 429")
+    try:
+        body = r.json()
+    except ValueError:
+        body = {"_text": r.text[:300]}
+    if r.status_code < 500:
+        limiter.success()
+    return r.status_code, body
