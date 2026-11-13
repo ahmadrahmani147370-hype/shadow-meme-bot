@@ -26,7 +26,10 @@ def test_python_check():
 
 
 def test_package_check_reports_missing():
-    res = {c.name: c for c in doctor.check_packages(("json", "definitely_not_a_pkg_123"))}
+    opt = {c.name: c for c in doctor.check_packages(("json",), ("definitely_not_optional_456",))}
+    assert opt["definitely_not_optional_456"].status == doctor.WARN and opt["json"].status == doctor.OK
+    assert set(doctor.REQUIRED_PACKAGES) == {"httpx", "websockets", "dotenv"}       # pandas/numpy optional (Termux)
+    res = {c.name: c for c in doctor.check_packages(("json", "definitely_not_a_pkg_123"), ())}
     assert res["json"].status == doctor.OK
     assert res["definitely_not_a_pkg_123"].status == doctor.FAIL
 

@@ -30,7 +30,8 @@ from .sources import ENDPOINTS, Endpoint
 OK, WARN, FAIL = "OK", "WARN", "FAIL"
 ICON = {OK: "✅", WARN: "⚠️ ", FAIL: "❌"}
 
-REQUIRED_PACKAGES = ("httpx", "websockets", "dotenv", "pandas", "numpy")
+REQUIRED_PACKAGES = ("httpx", "websockets", "dotenv")
+OPTIONAL_PACKAGES = ("pandas", "numpy")   # only for the collector.candles_df() analysis helper; the bot never needs them
 UA = "ShadowMeme/0.1 (+https://github.com/ahmadrahmani147370-hype/shadow-meme-bot)"
 
 
@@ -51,16 +52,19 @@ def check_python(min_version=(3, 10)) -> Check:
                  f"{platform.python_version()} ({'>=' if ok else '<'} {min_version[0]}.{min_version[1]} needed)")
 
 
-def check_packages(names=REQUIRED_PACKAGES) -> list[Check]:
+def check_packages(names=REQUIRED_PACKAGES, optional=OPTIONAL_PACKAGES) -> list[Check]:
     out = []
-    for n in names:
+    for n in tuple(names) + tuple(optional):
         try:
             m = importlib.import_module(n)
             out.append(Check("packages", n, OK, getattr(m, "__version__", "installed")))
         except Exception as e:  # ImportError, or a broken native build
             hint = "pkg install python-numpy" if n == "numpy" else (
                 "pkg install tur-repo && pkg install python-pandas" if n == "pandas" else f"pip install {'python-dotenv' if n == 'dotenv' else n}")
-            out.append(Check("packages", n, FAIL, f"missing ({type(e).__name__}) -> {hint}"))
+            if n in optional:
+                out.append(Check("packages", n, WARN, f"not installed (optional, analysis helper only) -> {hint}"))
+            else:
+                out.append(Check("packages", n, FAIL, f"missing ({type(e).__name__}) -> {hint}"))
     return out
 
 

@@ -348,3 +348,57 @@ def test_page_flags_stale_data(tmp_path, site):
     (d / "old.json").write_bytes(dash.snapshot_json(dash.build_snapshot(db, s, {}, now=_t.time() - 3600)))
     html = dom(f"{base}/index.html?data=old.json")
     assert "NO UPDATE" in html and "may be stopped" in html and "RUNNING" not in html
+
+
+# ------------------------------------------------------------------ gh CLI publisher (no token in .env)
+FAKE_GH = r'''#!/usr/bin/env python3
+import json, sys, os
+args = sys.argv[1:]
+body = json.loads(sys.stdin.read() or "{}")
+log = os.environ["FAKE_GH_LOG"]
+with open(log, "a") as f:
+    f.write(json.dumps({"args": args, "body": body}) + "\n")
+method, path = args[args.index("-X") + 1], args[args.index("-X") + 2]
+missing = os.environ.get("FAKE_GH_REF_MISSING") == "1"
+if path.endswith("/git/trees"):
+    code, out = 201, {"sha": "t" * 40}
+elif path.endswith("/git/commits"):
+    code, out = 201, {"sha": "c" * 40}
+elif method == "PATCH":
+    code, out = (422, {"message": "Reference does not exist"}) if missing else (200, {"object": {"sha": "c" * 40}})
+else:
+    code, out = 201, {"ref": body.get("ref")}
+sys.stdout.write(f"HTTP/2.0 {code} X\r\nContent-Type: application/json\r\n\r\n" + json.dumps(out))
+'''
+
+
+@pytest.mark.parametrize("missing", ["0", "1"])
+def test_gh_cli_publisher(tmp_path, monkeypatch, missing):
+    gh = tmp_path / "gh"
+    gh.write_text(FAKE_GH)
+    gh.chmod(0o755)
+    log = tmp_path / "gh.log"
+    monkeypatch.setenv("FAKE_GH_LOG", str(log))
+    monkeypatch.setenv("FAKE_GH_REF_MISSING", missing)
+    p = dash.GhCliPublisher("o/r", gh=str(gh))
+    assert asyncio.run(p.publish(b'{"x":1}')) == "c" * 40 and p.pushes == 1
+    calls = [json.loads(l) for l in log.read_text().splitlines()]
+    paths = [c["args"][c["args"].index("-X") + 2] for c in calls]
+    assert paths[:3] == ["repos/o/r/git/trees", "repos/o/r/git/commits", "repos/o/r/git/refs/heads/dashboard-data"]
+    assert (paths[-1] == "repos/o/r/git/refs") == (missing == "1")
+    assert calls[1]["body"]["parents"] == [] and calls[0]["body"]["tree"][0]["content"] == '{"x":1}'
+
+
+def test_gh_cli_publisher_missing_binary_is_a_clean_error():
+    p = dash.GhCliPublisher("o/r", gh="/nonexistent/gh")
+    with pytest.raises(dash.GitHubError):
+        asyncio.run(p.publish(b"{}"))
+    assert p.failures == 1
+
+
+def test_make_publisher_modes(tmp_path):
+    base = {"DB_PATH": str(tmp_path / "x.db")}
+    assert dash.make_publisher(load_settings(env=base)) is None
+    assert isinstance(dash.make_publisher(load_settings(env={**base, "GITHUB_TOKEN": "t" * 20})), dash.GitHubPublisher)
+    assert type(dash.make_publisher(load_settings(env={**base, "DASHBOARD_PUBLISHER": "gh"}))) is dash.GhCliPublisher
+    assert dash.make_publisher(load_settings(env={**base, "GITHUB_TOKEN": "t" * 20, "DASHBOARD_PUBLISHER": "off"})) is None

@@ -2,7 +2,7 @@
 httpx>=0.27,<1
 websockets>=12
 python-dotenv>=1.0
-# pandas and numpy: on Termux install the prebuilt packages instead of pip:
-#   pkg install python-numpy tur-repo && pkg install python-pandas
+# Optional (NOT needed by the bot, only the collector.candles_df analysis helper):
+#   pkg install tur-repo && pkg install python-numpy python-pandas
 # On a normal PC/Linux, pip is fine:
 #   pip install pandas numpy

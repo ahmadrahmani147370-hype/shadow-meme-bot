@@ -7,7 +7,7 @@ Solana meme coin scanner + **paper-trading** signal bot in Python, built for **A
 > private key, ever. `PAPER_ONLY` is a constant in the code; `.env` cannot turn it off.
 > Signals are not financial advice, and the bot reports only results it actually measured.
 
-## Status: Phase 9 of 10 ✅ (Telegram Mini App dashboard on GitHub Pages)
+## Status: v1.0.0 ✅ all 10 phases done (full test report: [docs/TEST_REPORT.md](docs/TEST_REPORT.md))
 
 | Phase | What | Status |
 |---|---|---|
@@ -20,11 +20,46 @@ Solana meme coin scanner + **paper-trading** signal bot in Python, built for **A
 | 7 | SQLite database hardening (crash-safe, bounded size, daily backups, CSV export) | ✅ done |
 | 8 | Telegram commands, alerts, daily report | ✅ done |
 | 9 | Dashboard (Telegram Mini App on GitHub Pages) + self-improving strategies | ✅ done |
-| 10 | Complete testing | ⏳ next |
+| 10 | Complete testing (fresh clone, 35 min end-to-end run, safety audit, Termux review) | ✅ done |
 
 Files for later phases exist as clearly marked stubs (`PHASE = N`, `IMPLEMENTED = False`).
 
-## Install on Android (Termux)
+## Quick start on the phone (5 steps)
+
+1. Install **Termux from F-Droid** (not the Play Store). Android: **Settings → Apps → Termux → Battery → Unrestricted**.
+2. Paste this in Termux (takes a few minutes; installs only small pure-Python packages, nothing is compiled):
+
+```bash
+pkg install -y git python && git clone https://github.com/ahmadrahmani147370-hype/shadow-meme-bot && cd shadow-meme-bot && bash setup_termux.sh
+```
+
+3. Put the Telegram token in `.env`: `nano .env` → `TELEGRAM_BOT_TOKEN=...` (chat id `7922990181` is already
+   set). Optional: `GITHUB_TOKEN=...` for the full dashboard (see "Dashboard" below). Save: Ctrl+O, Enter, Ctrl+X.
+4. **Stop the old FATHER bot** (one token = one program), then start: `bash start.sh`
+5. In Telegram: the bot says "SHADOW MEME bot online (paper-only)". Send `/status`, tap **📊 Dashboard**.
+   To stop: Ctrl+C in Termux. Update later: `git pull` and `bash start.sh` again.
+
+**Roman Urdu:** (1) F-Droid se Termux, battery "Unrestricted". (2) Upar wali line Termux mein paste karein.
+(3) `nano .env` mein `TELEGRAM_BOT_TOKEN=` ke aage token. (4) Purana FATHER bot band karein, phir `bash start.sh`.
+(5) Telegram mein `/status` bhejein aur **📊 Dashboard** dabayein. Band karna ho to Termux mein Ctrl+C.
+
+## Running on a PC / Linux box instead of the phone
+
+```bash
+git clone https://github.com/ahmadrahmani147370-hype/shadow-meme-bot && cd shadow-meme-bot
+pip install -r requirements.txt && cp .env.example .env && nano .env      # TELEGRAM_BOT_TOKEN=...
+setsid nohup bash tools/box_run.sh >/dev/null 2>&1 &                       # start (background + watchdog)
+bash tools/box_stop.sh                                                     # stop
+```
+
+`tools/box_run.sh` writes the bot output to `logs/box_run.log` and its own events to `logs/watchdog.log`,
+restarts the bot when it exits (10 s → 300 s backoff; it gives up only on exit 2 = config error) or when the
+log is silent for 10 minutes, and logs suspension gaps of the machine. It unsets an exported
+`TELEGRAM_BOT_TOKEN` so the value in `.env` is used (an exported variable always wins over `.env`; the bot
+also warns about that). With `gh auth login` done on that machine, `DASHBOARD_PUBLISHER=gh` uploads the
+full dashboard through the GitHub CLI without putting a token in `.env`.
+
+## Install on Android (Termux) - details
 
 1. Install **Termux from F-Droid** (the Play Store version is outdated). Optional: **Termux:API** and **Termux:Boot**, also from F-Droid.
 2. In Termux:
@@ -44,7 +79,8 @@ python -m shadow.doctor
    the safety checker (phase 4): `python main.py --debug safety <mint>` or `python main.py --debug safety-live 300`,
    everything with signals + judge (phase 5): `python main.py --debug signals 600`,
    and paper trading + self-learning (phase 6): `python main.py --debug paper 900` / `python main.py --debug paper report`
-6. `nano .env` (Telegram token; chat id is already 7922990181), then `./start.sh`. Everything else is done from Telegram.
+6. `nano .env` (Telegram token; chat id is already 7922990181), then `bash start.sh` (`./start.sh` works too when
+   Termux's termux-exec is active, which is the default). Everything else is done from Telegram.
 
 **Telegram bot:** SHADOW MEME uses the existing **@Fathersigna147lBot** with owner chat id
 `7922990181`. A bot token can only be used by one program at a time, so the old FATHER bot must be
@@ -615,7 +651,7 @@ setup_termux.sh  start.sh  .env.example  requirements.txt  requirements-dev.txt
 ## Development
 
 ```bash
-pip install -r requirements-dev.txt   # + pandas numpy (via pkg on Termux)
+pip install -r requirements-dev.txt   # pandas is optional (only the candles_df helper + its test)
 python -m pytest -q                   # all tests
 python -m pytest -q -m "not network"  # without internet
 ```

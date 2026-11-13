@@ -41,6 +41,21 @@ def _load_dotenv(path: Path) -> None:
         os.environ.setdefault(key, value)
 
 
+def _shadowed_secrets(path: Path) -> list[str]:
+    """Secret keys whose exported value differs from a non-empty value in .env (e.g. after a token rotation).
+    Only key names are returned, never values."""
+    if not path.is_file():
+        return []
+    vals = {}
+    for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = raw.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, _, v = line.partition("=")
+            vals[k.strip().removeprefix("export ").strip()] = v.strip().strip('"').strip("'")
+    keys = [f.upper() for f in SECRET_FIELDS]
+    return [k for k in keys if vals.get(k) and os.environ.get(k) and os.environ[k] != vals[k]]
+
+
 def _str(env: dict, key: str, default: str = "") -> str:
     return (env.get(key) or default).strip()
 
@@ -99,6 +114,7 @@ class Settings:
     github_repo: str = "ahmadrahmani147370-hype/shadow-meme-bot"
     dashboard_url: str = "https://ahmadrahmani147370-hype.github.io/shadow-meme-bot/"
     dashboard_branch: str = "dashboard-data"
+    dashboard_publisher: str = "auto"    # auto (GITHUB_TOKEN if set) | token | gh (GitHub CLI login, no token in .env) | off
     dashboard_push_min: float = 5.0       # snapshot every N minutes (local file always; GitHub only with a token)
 
     # Data sources. All free / keyless by default.
@@ -267,10 +283,15 @@ class Settings:
 
 def load_settings(env_file: str | Path | None = None, env: dict | None = None) -> Settings:
     """Build Settings. `env` (a dict) is used by tests instead of os.environ."""
-    if env is None:
-        _load_dotenv(Path(env_file) if env_file else PROJECT_ROOT / ".env")
-        env = dict(os.environ)
     w: list[str] = []
+    if env is None:
+        path = Path(env_file) if env_file else PROJECT_ROOT / ".env"
+        shadowed = _shadowed_secrets(path)
+        _load_dotenv(path)
+        env = dict(os.environ)
+        for k in shadowed:
+            w.append(f"{k} from the environment is used, NOT the different value in .env (environment wins). "
+                     f"If you changed it in .env, run `unset {k}` or open a new shell.")
 
     raw_paper = _str(env, "PAPER_ONLY", "true").lower()
     if raw_paper not in ("1", "true", "yes", "on"):
@@ -300,6 +321,7 @@ def load_settings(env_file: str | Path | None = None, env: dict | None = None) -
         github_repo=_str(env, "GITHUB_REPO", Settings.github_repo),
         dashboard_url=_url(env, "DASHBOARD_URL", Settings.dashboard_url.rstrip("/"), w) + "/",
         dashboard_branch=_str(env, "DASHBOARD_BRANCH", Settings.dashboard_branch),
+        dashboard_publisher=_str(env, "DASHBOARD_PUBLISHER", "auto").lower(),
         dashboard_push_min=_num(env, "DASHBOARD_PUSH_MIN", 5.0, float, w, 1, 1440),
         solana_rpc_url=_str(env, "SOLANA_RPC_URL", Settings.solana_rpc_url),
         solana_rpc_fallback=_str(env, "SOLANA_RPC_FALLBACK", Settings.solana_rpc_fallback),

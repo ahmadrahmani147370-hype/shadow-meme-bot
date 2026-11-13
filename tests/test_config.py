@@ -91,3 +91,15 @@ def test_relative_paths_resolve_under_project():
     s = load_settings(env={})
     assert s.path(s.db_path) == PROJECT_ROOT / "data" / "shadow.db"
     assert s.path("/tmp/x.db") == Path("/tmp/x.db")
+
+
+def test_warns_when_exported_secret_shadows_env_file(tmp_path, monkeypatch):
+    f = tmp_path / ".env"
+    f.write_text("TELEGRAM_BOT_TOKEN=new-token-value-123\n")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "old-revoked-value-456")
+    s = load_settings(env_file=f)
+    assert s.telegram_bot_token == "old-revoked-value-456"
+    w = [x for x in s.warnings if "TELEGRAM_BOT_TOKEN from the environment" in x]
+    assert w and "new-token" not in w[0] and "old-revoked" not in w[0]
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "new-token-value-123")
+    assert not any("from the environment" in x for x in load_settings(env_file=f).warnings)

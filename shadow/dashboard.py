@@ -11,6 +11,7 @@ Data path (no VPS, phone has no public URL):
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -318,9 +319,79 @@ class GitHubPublisher:
             self._client = None
 
 
+class GhCliPublisher(GitHubPublisher):
+    """Same 3 Git Data API calls, made through the GitHub CLI (`gh api`) with gh's own stored login, so no token has
+    to be copied into .env (DASHBOARD_PUBLISHER=gh; for a PC/box where `gh auth login` was done)."""
+
+    def __init__(self, repo: str, branch: str = "dashboard-data", gh: str = "gh"):
+        self._token, self.repo, self.branch, self.gh = "", repo, branch, gh
+        self.pushes = self.failures = 0
+        self.last_error, self.last_push_ts, self.disabled = "", 0.0, False
+
+    def redact(self, t) -> str:
+        return str(t)
+
+    async def _gh(self, method: str, path: str, body: dict) -> tuple[int, dict]:
+        proc = await asyncio.create_subprocess_exec(
+            self.gh, "api", "-X", method, f"repos/{self.repo}{path}", "--input", "-", "-i",
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        out, err = await asyncio.wait_for(proc.communicate(json.dumps(body).encode()), timeout=60)
+        text = out.decode("utf-8", "replace")
+        head, _, payload = text.replace("\r\n", "\n").partition("\n\n")
+        try:
+            code = int(head.split()[1])
+        except (IndexError, ValueError):
+            raise GitHubError(f"gh api {path}: {err.decode()[:160].strip() or 'no response'}") from None
+        try:
+            data = json.loads(payload) if payload.strip() else {}
+        except ValueError:
+            data = {}
+        return code, data
+
+    async def publish(self, content: bytes, message: str = "dashboard snapshot") -> str:
+        try:
+            code, tree = await self._gh("POST", "/git/trees", {"tree": [
+                {"path": "snapshot.json", "mode": "100644", "type": "blob", "content": content.decode("utf-8")},
+                {"path": "README.md", "mode": "100644", "type": "blob", "content": self.README}]})
+            if code != 201:
+                raise GitHubError(f"create tree: HTTP {code} {tree.get('message', '')}", code)
+            code, commit = await self._gh("POST", "/git/commits", {"message": message, "tree": tree["sha"], "parents": []})
+            if code != 201:
+                raise GitHubError(f"create commit: HTTP {code} {commit.get('message', '')}", code)
+            code, r = await self._gh("PATCH", f"/git/refs/heads/{self.branch}", {"sha": commit["sha"], "force": True})
+            if code in (404, 422):
+                code, r = await self._gh("POST", "/git/refs", {"ref": f"refs/heads/{self.branch}", "sha": commit["sha"]})
+                if code != 201:
+                    raise GitHubError(f"create branch: HTTP {code} {r.get('message', '')}", code)
+            elif code != 200:
+                raise GitHubError(f"update branch: HTTP {code} {r.get('message', '')}", code)
+        except (GitHubError, OSError, asyncio.TimeoutError) as e:
+            self.failures += 1
+            self.last_error = str(e) if isinstance(e, GitHubError) else f"gh: {type(e).__name__}"
+            raise GitHubError(self.last_error, getattr(e, "code", None)) from None
+        self.pushes += 1
+        self.last_push_ts = time.time()
+        return commit["sha"]
+
+    async def close(self) -> None:
+        return None
+
+
+def make_publisher(s: Settings):
+    """DASHBOARD_PUBLISHER: auto (GITHUB_TOKEN if set, else off) | token | gh | off."""
+    mode = (s.dashboard_publisher or "auto").lower()
+    if mode == "off":
+        return None
+    if mode == "gh":
+        return GhCliPublisher(s.github_repo, s.dashboard_branch)
+    if s.github_token:
+        return GitHubPublisher(s.github_token, s.github_repo, s.dashboard_branch)
+    return None
+
+
 def raw_url(s: Settings) -> str:
     return f"https://raw.githubusercontent.com/{s.github_repo}/{s.dashboard_branch}/snapshot.json"
 
 
 __all__ = ["build_snapshot", "snapshot_json", "summary", "encode_summary", "decode_summary", "dashboard_url",
-           "write_local", "GitHubPublisher", "GitHubError", "instance_id", "downsample", "raw_url"]
+           "write_local", "GitHubPublisher", "GhCliPublisher", "make_publisher", "GitHubError", "instance_id", "downsample", "raw_url"]

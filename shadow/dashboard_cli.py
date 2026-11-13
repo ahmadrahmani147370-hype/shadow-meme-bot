@@ -33,12 +33,13 @@ def run(s: Settings, rest: list[str]) -> int:
         if sub == "url":
             print(dash.dashboard_url(s, snap))
             return 0
-        if not s.github_token:
-            print("GITHUB_TOKEN is not set: nothing to publish (the dashboard shows the URL summary only).")
+        if dash.make_publisher(s) is None:
+            print("No publisher: set GITHUB_TOKEN (or DASHBOARD_PUBLISHER=gh with a gh login). The dashboard shows the "
+                  "URL summary only.")
             return 2
 
         async def pub():
-            p = dash.GitHubPublisher(s.github_token, s.github_repo, s.dashboard_branch)
+            p = dash.make_publisher(s)
             try:
                 return await p.publish(dash.snapshot_json(snap))
             finally:

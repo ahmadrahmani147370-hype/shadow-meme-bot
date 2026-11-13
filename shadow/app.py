@@ -63,8 +63,7 @@ class App:
             self.bot = TelegramBot(s, self.db, self.api, app=self)
         self.paper.paused = self.paused
         self.learn_runs = 0
-        self.publisher = (dash.GitHubPublisher(s.github_token, s.github_repo, s.dashboard_branch)
-                          if s.github_token else None)
+        self.publisher = dash.make_publisher(s)
         self.snapshot_path = Path(self.db.path).parent / "dashboard" / "snapshot.json"
         self._snap, self._snap_ts = None, 0.0
 
