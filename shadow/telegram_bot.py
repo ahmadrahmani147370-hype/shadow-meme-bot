@@ -107,6 +107,25 @@ def buy_watch_text(row: dict, verdict=None) -> str:
     return "\n".join(lines)
 
 
+def buy_text(pos: dict, row: dict | None = None, verdict=None) -> str:
+    """v1.1 buy-only mode: the single pushed message - a paper BUY that really opened."""
+    sym = pos.get("symbol") or _short(pos["mint"])
+    e = pos.get("entry_price")
+    lines = [f"🟢 BUY - {sym} [{pos.get('universe')}] (paper #{pos.get('id')})",
+             f"Strategy {pos.get('strategy')} v{pos.get('params_version') or '?'}"
+             + (f" | score {row.get('score') or 0:.0f}" if row else ""),
+             f"Size {_usd(pos.get('size_usd'))} @ {_px(e)} (slippage {pos.get('entry_slippage_pct') or 0:.2f}%)"]
+    if row:
+        lines.append(f"MCAP {_usd(row.get('mcap'))} | Liq {_usd(row.get('liquidity'))}")
+    sl, tp = pos.get("sl"), pos.get("tp")
+    if e and sl and tp:
+        lines.append(f"SL {_px(sl)} ({(sl / e - 1) * 100:+.1f}%) | TP {_px(tp)} ({(tp / e - 1) * 100:+.1f}%)")
+    if verdict is not None:
+        lines.append(f"Judge ✅ APPROVE (confidence {verdict.confidence:.2f})")
+    lines += [f"Mint: {pos.get('mint')}", f"https://dexscreener.com/solana/{pos.get('mint')}", PAPER_TAG]
+    return "\n".join(lines)
+
+
 def signal_text(row: dict) -> str:
     a = row.get("alert_type")
     return (f"{ICON.get(a, '-')} {a} - {row.get('symbol') or '?'} [{row.get('universe')}] {row.get('strategy') or ''}\n"
@@ -285,9 +304,21 @@ class TelegramBot:
     def paused(self) -> bool:
         return bool(self.app and getattr(self.app, "paused", False))
 
+    @property
+    def buy_only(self) -> bool:
+        return self.s.tg_notify != "all"
+
     def on_signal(self, row: dict, verdict=None) -> None:
         try:
             a = row.get("alert_type")
+            if self.buy_only:          # v1.1: nothing pushed here; remember the signal for the BUY message
+                if a == "BUY_WATCH":
+                    self._last_sig = getattr(self, "_last_sig", {})
+                    self._last_sig[row.get("mint")] = (row, verdict)
+                    if len(self._last_sig) > 200:
+                        self._last_sig.pop(next(iter(self._last_sig)))
+                self.stats["silenced_" + str(a).lower()] += 1
+                return
             if self.paused and a != "REJECT":
                 self.stats["paused_skip"] += 1
                 return
@@ -299,6 +330,13 @@ class TelegramBot:
 
     def on_trade(self, kind: str, pos: dict) -> None:
         try:
+            if self.buy_only:
+                if kind != "OPEN":
+                    self.stats["silenced_paper_" + kind.lower()] += 1
+                    return
+                row, verdict = getattr(self, "_last_sig", {}).pop(pos.get("mint"), (None, None))
+                self.alert(buy_text(pos, row, verdict), "buy")
+                return
             self.alert(trade_text(kind, pos), f"paper_{kind.lower()}")
         except Exception as e:  # noqa: BLE001
             log.warning("trade alert failed: %s", e)
@@ -308,6 +346,9 @@ class TelegramBot:
         n = 0
         for uid, text in reports.pending_strategy_updates(self.db):
             if uid in self.inflight_updates:
+                continue
+            if self.buy_only:                       # kept in the DB for /strategies, never pushed
+                reports.mark_strategy_updates_sent(self.db, [uid])
                 continue
             if self.dry_run:
                 self.inflight_updates.add(uid)      # logged once; stays unsent in the DB for the real bot
@@ -334,6 +375,9 @@ class TelegramBot:
             return False
         if last >= yday or getattr(self, "_dry_daily", None) == yday:
             return False
+        if self.buy_only:                           # /report still answers on request
+            self.db.meta_set("tg_daily_report_day", yday)
+            return False
         text = reports.report_text(self.db, self.s, now=day_start(now) - 1)
         if self.dry_run:
             self._dry_daily = yday
@@ -344,6 +388,8 @@ class TelegramBot:
         return True
 
     def check_digest(self) -> None:
+        if self.buy_only:
+            return
         d = self.limiter.digest()
         if d:
             self.alert(d, "digest")
@@ -456,7 +502,7 @@ class TelegramBot:
                 f"Status: {'⏸️ PAUSED' if self.paused else '▶️ running'} | /help for commands")
 
     async def run(self) -> None:
-        if self.s.tg_startup_message:
+        if self.s.tg_startup_message and not self.buy_only:
             url = None
             try:
                 url = self.dashboard_link()
@@ -532,13 +578,18 @@ class TelegramBot:
             if "equity" in st:
                 lines.append(f"Paper: equity {_usd(st['equity'])} | cash {_usd(st['cash'])} | open {st['n_open']} | "
                              f"realized {_usd(st['realized_pnl'])}")
+            if "coins_cap" in st:
+                f = st.get("fast") or {}
+                lines.append(f"Coins checked today {st['coins_today']}/{st['coins_cap'] or '∞'} | fast refresh "
+                             f"p50 {f.get('refresh_s_p50') or '-'}s on {f.get('hot', 0)} hot coins")
             lines.append(f"DB {st.get('db_mb', 0):.1f} MB | strategies " + ", ".join(
                 f"{k} v{v}" for k, v in (st.get("strategies") or {}).items()))
         a = self.api
         link = "OK" if a and a.reachable else ("unreachable, retrying" if a and a.reachable is False else "starting")
         lines.append(f"Telegram {link} | queue {len(self.queue)} | sent {self.stats['sent']} | ignored chats "
                      f"{self.stats['ignored_foreign']}" + (" | ⚠️ 409 conflict" if self.conflict else "")
-                     + (" | alerts DRY-RUN" if self.dry_run else ""))
+                     + (" | alerts DRY-RUN" if self.dry_run else "")
+                     + (" | push: BUY only" if self.buy_only else " | push: all"))
         return "\n".join(lines)
 
     def cmd_scanner(self) -> str:

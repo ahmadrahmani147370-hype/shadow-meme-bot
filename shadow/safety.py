@@ -526,6 +526,7 @@ class SafetyChecker:
         self.quote_queue: deque[str] = deque()
         self.priority: set[str] = set()              # signal candidates waiting for a safety check
         self.near_fn = None                          # set by the signal engine (phase 5): real signal proximity
+        self.gate_fn = None                          # v1.1: (mint, market) -> bool; mcap floor + daily coin cap
         self._rc_missing: dict[str, float] = {}      # RugCheck could not build a report (negative cache)
         self._quote_tried: dict[str, float] = {}   # last attempt (also failed/no-price ones)
         self.stats: Counter = Counter()
@@ -790,6 +791,8 @@ class SafetyChecker:
         first = [m for m in mints if m in self.priority]
         for m in mints:
             if m in self.priority:
+                continue
+            if self.gate_fn is not None and not self.gate_fn(m, markets.get(m)):
                 continue
             r = self.get_report(m)
             if r is None:

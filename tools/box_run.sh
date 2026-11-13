@@ -8,6 +8,10 @@
 #   suspended/paused (logged as "box was suspended ~N s") - nothing can run while the box is paused.
 cd "$(dirname "$0")/.." || exit 1
 mkdir -p logs data
+rm -f logs/NO_AUTOSTART          # starting by hand re-enables the autostart hook
+exec 9>&- 2>/dev/null || true    # never hold tools/ensure_running.sh's lock
+# a shell-hook start may have a minimal PATH: keep python3 / gh (dashboard upload) reachable
+export PATH="$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.local/bin"
 # Use the token from .env, never a stale exported one (process env beats .env).
 unset TELEGRAM_BOT_TOKEN TELEGRAM_BOT_TOKEN_NEW TG_BOT_TOKEN
 export HEALTH_LOG_SEC=${HEALTH_LOG_SEC:-60}
@@ -38,7 +42,7 @@ while true; do
   done
   wait "$PID"; code=$?; PID=""; rm -f logs/bot.pid
   w "bot exited with code $code after $(( $(date +%s) - started ))s"
-  [ "$code" -eq 2 ] && { w "config error - fix .env; watchdog stops"; rm -f logs/watchdog.pid; exit 2; }
+  [ "$code" -eq 2 ] && { w "config error - fix .env; watchdog stops (autostart off until box_run.sh)"; touch logs/NO_AUTOSTART; rm -f logs/watchdog.pid; exit 2; }
   [ $(( $(date +%s) - started )) -gt 600 ] && delay=10
   w "restarting in ${delay}s"; sleep "$delay"; delay=$(( delay * 2 > 300 ? 300 : delay * 2 ))
 done

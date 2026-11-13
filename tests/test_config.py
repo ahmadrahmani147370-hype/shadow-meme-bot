@@ -16,7 +16,9 @@ def test_defaults_match_spec():
     assert s2.paper_buy_fee == 0.5 and s2.paper_sell_fee == 0.25  # still configurable
     assert s.paper_max_open == 5
     assert s.paper_daily_target == 50
-    assert s.min_trade_score == 65
+    assert s.min_trade_score == 50          # v1.1: global floor; each strategy's min_score decides
+    assert s.trade_min_mcap_usd == 1_000_000 and s.coins_per_day == 1000 and s.tg_notify == "buy"
+    assert s.fast_refresh_sec == 1.0 and s.trade_min_liq_mcap == 0.02
     assert s.solana_rpc_url.startswith("https://")
     assert s.warnings == ()
 

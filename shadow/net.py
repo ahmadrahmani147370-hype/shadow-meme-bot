@@ -62,7 +62,8 @@ class RateLimiter:
 DEFAULT_BUDGETS = {
     "geckoterminal": 6,      # docs ~10/min
     "rugcheck": 50,          # docs ~1-3 req/s (scanner polls 10/min, safety reports <= SAFETY_RC_PER_MIN)
-    "dexscreener": 240,      # tokens/pairs 300/min
+    "dexscreener": 180,      # tokens/pairs 300/min (v1.1: 180 slow lanes + 70 fast lane = 250 < 300)
+    "dexscreener_fast": 70,  # v1.1 FastPricer: 1 batch call/s for positions / watches / near-trigger coins
     "dexscreener_profiles": 50,
     "jupiter": 25,           # keyless 30/min
     "solana_rpc": 60,

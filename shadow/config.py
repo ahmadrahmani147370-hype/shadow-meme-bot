@@ -106,6 +106,7 @@ class Settings:
     tg_send_interval_sec: float = 1.1     # min gap between messages (Telegram: ~1 msg/s per chat)
     tg_menu_button: bool = True           # chat menu button opens the dashboard Mini App
     tg_log_only: bool = False             # testing: no Telegram network calls at all, sends only written to the log
+    tg_notify: str = "buy"                # v1.1: buy = ONLY paper BUY notifications are pushed (all = every alert)
     health_log_sec: int = 300             # HEALTH line (RSS, CPU, DB size, API calls/429s, loop lag) every N seconds
 
     # Dashboard (phase 9): Telegram Mini App on GitHub Pages (docs/). Optional GITHUB_TOKEN (fine-grained,
@@ -226,7 +227,7 @@ class Settings:
     paper_slippage_pct: float = 3.0
     paper_max_open: int = 5
     paper_daily_target: int = 50   # a target, never a quota: weak signals are never forced
-    min_trade_score: int = 65      # only "Watch" (65-79) or "Strong Watch" (80-100) may open a paper trade
+    min_trade_score: int = 50      # global floor; v1.1: each strategy's own min_score decides (>= $1M coins score lower)
     paper_min_slippage_pct: float = 0.5   # entry/exit slippage = Jupiter quote price impact, at least this
     paper_exit_quote_max_age_sec: int = 600  # older quote at exit -> PAPER_SLIPPAGE_PCT is used instead
     paper_no_price_close_min: int = 30    # no price for this long -> close at the last known price
@@ -237,13 +238,28 @@ class Settings:
     # Self-learning (phase 6): guarded tuning of strategy params and judge thresholds
     learn_enabled: bool = True
     learn_every_min: int = 30
-    learn_min_trades: int = 30            # closed watches per strategy+universe before any change
-    learn_min_test: int = 10              # of which at least this many in the out-of-sample (latest) part
+    learn_min_trades: int = 12            # v1.1: closed samples (watches + shadow) per strategy+universe (was 30)
+    learn_min_test: int = 4               # of which at least this many in the out-of-sample (latest) part (was 10)
+    learn_shrink_k: float = 20.0          # v1.1: gains are shrunk by n/(n+K): small samples need bigger gains
     learn_train_frac: float = 0.7         # walk-forward: oldest 70% choose, newest 30% must confirm
     learn_max_step_pct: float = 20.0      # one step changes one param by at most this %
     learn_min_improve_pct: float = 0.5    # % points per opportunity, on train AND test
-    learn_cooldown_h: float = 6.0         # at most one change per strategy (or judge) per this many hours
-    learn_rollback_min: int = 10          # live samples of a new version before it is judged
+    learn_cooldown_h: float = 3.0         # at most one change per strategy (or judge) per this many hours (was 6)
+    learn_rollback_min: int = 6           # live samples of a new version before it is judged (was 10)
+    shadow_track: bool = True             # v1.1: near-miss setups (score just under min) are tracked virtually
+    shadow_score_margin: float = 15.0     # ... down to min_score - this
+
+    # v1.1 trading universe / daily cap / fast refresh (Ahmed's rules, 13 Nov 2026)
+    trade_min_mcap_usd: float = 1_000_000.0  # only coins with market cap >= this are traded (all universes)
+    eval_min_mcap_usd: float = 750_000.0  # safety check + scoring start here (catch coins before they cross $1M)
+    trade_min_liq_usd: float = 50_000.0   # pool liquidity floor for a trade
+    trade_min_liq_mcap: float = 0.02      # liquidity / market cap floor (fake-supply $50M launches have ~0.2%)
+    trade_min_age_min: float = 10.0       # no trades in a token's first minutes (launch chaos)
+    coins_per_day: int = 1000             # unique coins admitted to evaluation per PKT day (0 = unlimited)
+    fast_refresh_sec: float = 1.0         # price refresh for open positions / watches / near-trigger coins (0 = off)
+    fast_max_mints: int = 30              # one DexScreener batch call per tick (30 mints max per call)
+    fast_near_sec: int = 120              # a coin with a strategy setup stays in the fast set this long
+    fast_jup_sec: float = 5.0             # v1.1: Jupiter price v3 for open positions/watches every N s (0 = off)
     learn_rollback_margin_pct: float = 0.0  # new version worse than the old one on the same samples -> rollback
     judge_tuning_enabled: bool = True
     universe_backfill_sec: int = 60       # one GeckoTerminal OHLCV backfill per minute for universe members
@@ -281,9 +297,15 @@ class Settings:
         return p if p.is_absolute() else PROJECT_ROOT / p
 
 
+# Test hook only (tests/conftest.py): defaults layered under an explicit `env` dict. Empty in the bot.
+TEST_DEFAULTS: dict[str, str] = {}
+
+
 def load_settings(env_file: str | Path | None = None, env: dict | None = None) -> Settings:
     """Build Settings. `env` (a dict) is used by tests instead of os.environ."""
     w: list[str] = []
+    if env is not None and TEST_DEFAULTS:
+        env = {**TEST_DEFAULTS, **env}
     if env is None:
         path = Path(env_file) if env_file else PROJECT_ROOT / ".env"
         shadowed = _shadowed_secrets(path)
@@ -316,6 +338,7 @@ def load_settings(env_file: str | Path | None = None, env: dict | None = None) -
         tg_send_interval_sec=_num(env, "TELEGRAM_SEND_INTERVAL_SEC", 1.1, float, w, 0, 60),
         tg_menu_button=_bool(env, "TELEGRAM_MENU_BUTTON", True),
         tg_log_only=_bool(env, "TELEGRAM_LOG_ONLY", False),
+        tg_notify=("all" if _str(env, "TELEGRAM_NOTIFY", "buy").lower() == "all" else "buy"),
         health_log_sec=_num(env, "HEALTH_LOG_SEC", 300, int, w, 10, 86400),
         github_token=_str(env, "GITHUB_TOKEN"),
         github_repo=_str(env, "GITHUB_REPO", Settings.github_repo),
@@ -415,7 +438,7 @@ def load_settings(env_file: str | Path | None = None, env: dict | None = None) -
         paper_slippage_pct=_num(env, "PAPER_SLIPPAGE_PCT", 3.0, float, w, 0, 50),
         paper_max_open=_num(env, "PAPER_MAX_OPEN", 5, int, w, 1, 50),
         paper_daily_target=_num(env, "PAPER_DAILY_TARGET", 50, int, w, 0, 10000),
-        min_trade_score=_num(env, "MIN_TRADE_SCORE", 65, int, w, 50, 100),
+        min_trade_score=_num(env, "MIN_TRADE_SCORE", 50, int, w, 30, 100),
         paper_min_slippage_pct=_num(env, "PAPER_MIN_SLIPPAGE_PCT", 0.5, float, w, 0, 50),
         paper_exit_quote_max_age_sec=_num(env, "PAPER_EXIT_QUOTE_MAX_AGE_SEC", 600, int, w, 10, 86400),
         paper_no_price_close_min=_num(env, "PAPER_NO_PRICE_CLOSE_MIN", 30, int, w, 1, 10080),
@@ -424,13 +447,26 @@ def load_settings(env_file: str | Path | None = None, env: dict | None = None) -
         paper_equity_every_sec=_num(env, "PAPER_EQUITY_EVERY_SEC", 60, int, w, 10, 86400),
         learn_enabled=_str(env, "LEARN_ENABLED", "true").lower() in ("1", "true", "yes", "on"),
         learn_every_min=_num(env, "LEARN_EVERY_MIN", 30, int, w, 1, 10080),
-        learn_min_trades=_num(env, "LEARN_MIN_TRADES", 30, int, w, 10, 100000),
-        learn_min_test=_num(env, "LEARN_MIN_TEST", 10, int, w, 3, 100000),
+        learn_min_trades=_num(env, "LEARN_MIN_TRADES", 12, int, w, 5, 100000),
+        learn_min_test=_num(env, "LEARN_MIN_TEST", 4, int, w, 2, 100000),
+        learn_shrink_k=_num(env, "LEARN_SHRINK_K", 20.0, float, w, 0, 10000),
         learn_train_frac=_num(env, "LEARN_TRAIN_FRAC", 0.7, float, w, 0.3, 0.9),
         learn_max_step_pct=_num(env, "LEARN_MAX_STEP_PCT", 20.0, float, w, 1, 50),
         learn_min_improve_pct=_num(env, "LEARN_MIN_IMPROVE_PCT", 0.5, float, w, 0, 100),
-        learn_cooldown_h=_num(env, "LEARN_COOLDOWN_H", 6.0, float, w, 0, 720),
-        learn_rollback_min=_num(env, "LEARN_ROLLBACK_MIN", 10, int, w, 3, 100000),
+        learn_cooldown_h=_num(env, "LEARN_COOLDOWN_H", 3.0, float, w, 0, 720),
+        learn_rollback_min=_num(env, "LEARN_ROLLBACK_MIN", 6, int, w, 3, 100000),
+        shadow_track=_bool(env, "SHADOW_TRACK", True),
+        shadow_score_margin=_num(env, "SHADOW_SCORE_MARGIN", 15.0, float, w, 0, 50),
+        trade_min_mcap_usd=_num(env, "TRADE_MIN_MCAP_USD", 1_000_000.0, float, w, 0, 1e13),
+        eval_min_mcap_usd=_num(env, "EVAL_MIN_MCAP_USD", 750_000.0, float, w, 0, 1e13),
+        trade_min_liq_usd=_num(env, "TRADE_MIN_LIQ_USD", 50_000.0, float, w, 0, 1e12),
+        trade_min_liq_mcap=_num(env, "TRADE_MIN_LIQ_MCAP", 0.02, float, w, 0, 10),
+        trade_min_age_min=_num(env, "TRADE_MIN_AGE_MIN", 10.0, float, w, 0, 100000),
+        coins_per_day=_num(env, "COINS_PER_DAY", 1000, int, w, 0, 10_000_000),
+        fast_refresh_sec=_num(env, "FAST_REFRESH_SEC", 1.0, float, w, 0, 600),
+        fast_max_mints=_num(env, "FAST_MAX_MINTS", 30, int, w, 1, 30),
+        fast_near_sec=_num(env, "FAST_NEAR_SEC", 120, int, w, 0, 86400),
+        fast_jup_sec=_num(env, "FAST_JUP_SEC", 5.0, float, w, 0, 600),
         learn_rollback_margin_pct=_num(env, "LEARN_ROLLBACK_MARGIN_PCT", 0.0, float, w, 0, 100),
         judge_tuning_enabled=_str(env, "JUDGE_TUNING_ENABLED", "true").lower() in ("1", "true", "yes", "on"),
         universe_backfill_sec=_num(env, "UNIVERSE_BACKFILL_SEC", 60, int, w, 15, 86400),

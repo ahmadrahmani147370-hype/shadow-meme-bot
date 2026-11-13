@@ -37,6 +37,7 @@ log = logging.getLogger("shadow.signals")
 
 STRONG_WATCH, WATCH, WEAK, REJECT_CLASS = "STRONG_WATCH", "WATCH", "WEAK", "REJECT"
 BUY_WATCH, SELL, HOLD, REJECT = "BUY_WATCH", "SELL", "HOLD", "REJECT"
+SHADOW = "SHADOW"        # v1.1: near-miss setup tracked virtually for self-learning (never notified, never traded)
 BULL, BEAR = 1, -1
 PATTERNS = ("early_pump", "first_green_candle", "first_pullback", "breakout", "migration_breakout")
 FLOW_WEIGHTS = {"volume_increase": 12, "buyer_increase": 10, "buy_sell_pressure": 13}
@@ -326,8 +327,9 @@ class Sources:
 
 class SignalEngine:
     def __init__(self, settings: Settings, db: Database, sources: Sources, *, checker=None, judge=None,
-                 clock=time.time, on_signal=None, paper=None):
+                 clock=time.time, on_signal=None, paper=None, cap=None):
         self.s, self.db, self.src = settings, db, sources
+        self.cap = cap                                  # v1.1 DailyCap (unique coins evaluated per day)
         self.checker, self.judge = checker, judge
         self.clock = clock
         self.on_signal = on_signal
@@ -352,13 +354,14 @@ class SignalEngine:
     def _reload_open(self) -> None:
         """Open watches survive a restart (their price path restarts from the reload)."""
         for r in self.db.open_signals():
-            if r["alert_type"] != BUY_WATCH or not r["entry"]:
+            if r["alert_type"] not in (BUY_WATCH, SHADOW) or not r["entry"]:
                 continue
             seen = self.db.get_seen(r["mint"]) or {}
             self.open[r["id"]] = {"id": r["id"], "mint": r["mint"], "strategy": r["strategy"], "universe": r["universe"],
                                   "entry": r["entry"], "sl": r["sl"], "tp": r["tp"], "time_stop_min": r["time_stop_min"],
                                   "ts": r["ts"], "max_up": r["max_up_pct"] or 0.0, "max_down": r["max_down_pct"] or 0.0,
                                   "last_hold": r["ts"], "approved": r["judge_verdict"] == "APPROVE",
+                                  "shadow": r["alert_type"] == SHADOW,
                                   "symbol": r["symbol"] or "", "creator": seen.get("creator")}
             self._start_path(r["id"], r["mint"], r["entry"], r["ts"], r["time_stop_min"] or 30,
                              json.loads(r.get("path_json") or "[]"))
@@ -389,6 +392,47 @@ class SignalEngine:
                 self.db.update_signal(sid, path_json=json.dumps(pth["pts"], separators=(",", ":")))
             if done and not flush_all:
                 self.paths.pop(sid, None)
+
+    # ---- v1.1 gates (Ahmed's rules + rug evidence from the 13 Nov live data)
+    @staticmethod
+    def mcap_of(md) -> float:
+        return float((md.market_cap or md.fdv or 0.0) if md else 0.0)
+
+    def hot(self, mint: str) -> bool:
+        """Coins whose exits/paths must keep running whatever the gates say."""
+        if any(o["mint"] == mint for o in self.open.values()) or any(p["mint"] == mint for p in self.paths.values()):
+            return True
+        return bool(self.paper is not None and any(p["mint"] == mint for p in self.paper.open_positions()))
+
+    def eval_allowed(self, mint: str, md=None) -> bool:
+        """Safety check + scoring only for coins near/above the trading floor, under the daily coin cap.
+        New launches below EVAL_MIN_MCAP_USD are still scanned (collector) but cost nothing here."""
+        md = md or self.src.get_market(mint)
+        if self.hot(mint):
+            return True
+        liq = md.liquidity_usd if md else None
+        if self.mcap_of(md) < self.s.eval_min_mcap_usd or (liq is not None and liq < self.s.paper_rug_liquidity_usd):
+            self.stats["skip_below_eval_mcap"] += 1      # (a drained pool's dust price can show a fake huge mcap)
+            return False
+        if self.cap is not None and not self.cap.admit(mint):
+            self.stats["skip_daily_cap"] += 1
+            return False
+        return True
+
+    def trade_gate(self, ev: Evaluation) -> tuple[str | None, str]:
+        """(None, '') = tradable. ('silent', why) = below the mcap floor (no REJECT row: thousands per day).
+        ('reject', why) = above the floor but fails a liquidity / age rule (shown in the kill log)."""
+        f, s = ev.features, self.s
+        mcap, liq, age = f.get("mcap") or 0.0, f.get("liquidity"), f.get("age_min")
+        if mcap < s.trade_min_mcap_usd:
+            return "silent", f"mcap ${mcap:,.0f} < ${s.trade_min_mcap_usd:,.0f}"
+        if liq is None or liq < s.trade_min_liq_usd:
+            return "reject", f"liquidity ${liq or 0:,.0f} < ${s.trade_min_liq_usd:,.0f}"
+        if s.trade_min_liq_mcap and liq / mcap < s.trade_min_liq_mcap:
+            return "reject", f"liquidity/mcap {liq / mcap * 100:.2f}% < {s.trade_min_liq_mcap * 100:.1f}% (thin pool)"
+        if s.trade_min_age_min and age is not None and age < s.trade_min_age_min:
+            return "reject", f"token age {age:.1f} min < {s.trade_min_age_min:.0f} min (launch chaos)"
+        return None, ""
 
     # ---- quote proximity for the safety checker (replaces the phase-4 volume placeholder)
     def near_signal(self, mint: str, md=None, rep=None) -> bool:
@@ -457,6 +501,18 @@ class SignalEngine:
         if any(o["mint"] == ev.mint and o["strategy"] == st.name for o in self.open.values()):
             return
         rkey = (ev.mint, REJECT)        # one REJECT per coin per cooldown, not one per strategy
+        kind, gwhy = self.trade_gate(ev)
+        if kind == "silent":
+            self.stats["gate_below_min_mcap"] += 1
+            return
+        if kind == "reject":
+            self.stats["gate_" + gwhy.split(" ")[0].replace("/", "_")] += 1
+            self.last_signal[key] = now
+            if now - self.last_signal.get(rkey, 0) >= self.s.signal_cooldown_min * 60:
+                self.last_signal[rkey] = now
+                self._emit(self._row(ev, st, REJECT, f"trade filter: {gwhy}", self.checker.get_report(ev.mint)
+                                     if self.checker else None))
+            return
         rep = self.checker.get_report(ev.mint) if self.checker else None
         if rep is None or rep.expired(now):
             self.stats["waiting_safety"] += 1
@@ -478,6 +534,9 @@ class SignalEngine:
             return
         if ev.score < p["min_score"]:
             self.last_signal[key] = now
+            if self.s.shadow_track and ev.score >= p["min_score"] - self.s.shadow_score_margin:
+                self._shadow(ev, st, p, rep, why)
+                return
             if now - self.last_signal.get(rkey, 0) >= self.s.signal_cooldown_min * 60:
                 self.last_signal[rkey] = now
                 self._emit(self._row(ev, st, REJECT, f"score {ev.score:.1f} < {p['min_score']} ({ev.cls})", rep))
@@ -518,6 +577,21 @@ class SignalEngine:
                           "sl": p["sl"], "tp": p["tp"], "time_stop_min": p["time_stop_min"], "ts": now,
                           "max_up": 0.0, "max_down": 0.0, "last_hold": now, "approved": bool(verdict and verdict.verdict == "APPROVE"),
                           "symbol": md.symbol if md else "", "creator": (self.db.get_seen(ev.mint) or {}).get("creator")}
+
+    def _shadow(self, ev: Evaluation, st: Strategy, p: dict, rep, why: str) -> None:
+        """Near miss: same levels as a real watch, tracked virtually (path + outcome) so self-learning can test a
+        lower min_score on real outcomes. Not notified, not judged, never traded."""
+        now = self.clock()
+        row = self._row(ev, st, SHADOW, f"shadow: score {ev.score:.1f} < {p['min_score']} | {why}", rep, levels=p,
+                        status="open")
+        sid = self.db.add_signal(row)
+        self.stats["shadow_tracked"] += 1
+        self._start_path(sid, ev.mint, p["entry"], now, p["time_stop_min"])
+        md = self.src.get_market(ev.mint)
+        self.open[sid] = {"id": sid, "mint": ev.mint, "strategy": st.name, "universe": ev.universe, "entry": p["entry"],
+                          "sl": p["sl"], "tp": p["tp"], "time_stop_min": p["time_stop_min"], "ts": now,
+                          "max_up": 0.0, "max_down": 0.0, "last_hold": now, "approved": False, "shadow": True,
+                          "symbol": md.symbol if md else "", "creator": None}
 
     def judge_context(self, ev: Evaluation, st: Strategy) -> dict:
         approved_open = [o for o in self.open.values() if o["approved"]]
@@ -577,6 +651,9 @@ class SignalEngine:
         self.db.update_signal(o["id"], status="closed", exit_ts=now, exit_price=price, exit_reason=reason, pnl_pct=pnl,
                               max_up_pct=o["max_up"], max_down_pct=o["max_down"])
         outcome = "unknown" if pnl is None else ("win" if pnl > 0 else "loss")
+        if o.get("shadow"):
+            self.stats[f"shadow_closed_{outcome}"] += 1
+            return
         self.db.set_judge_outcome(o["id"], outcome, pnl, now)
         self.stats[f"closed_{reason}"] += 1
         self.stats["closed_approved" if o["approved"] else "closed_vetoed"] += 1
@@ -593,6 +670,8 @@ class SignalEngine:
         evals: dict[str, Evaluation] = {}
         now = self.clock()
         for m in self.src.tracked_mints():
+            if not self.eval_allowed(m):
+                continue
             try:
                 ev = self.evaluate(m)
             except Exception as e:  # one bad coin must not stop the engine
@@ -626,6 +705,17 @@ class SignalEngine:
                 self.errors.append(f"{time.strftime('%H:%M:%S')} paper manage: {type(e).__name__}: {e}")
         return len(evals)
 
+    async def fast_tick(self) -> None:
+        """v1.1: exits on ~1 s prices (FastPricer). Pattern-based exits (dump / exhaustion) stay on the normal step,
+        which has candles; SL / TP / trailing / time stops / rug exits run here."""
+        self.manage_open({})
+        if self.paper is not None:
+            try:
+                await self.paper.manage()
+            except Exception as e:
+                self.stats["errors"] += 1
+                self.errors.append(f"{time.strftime('%H:%M:%S')} paper fast manage: {type(e).__name__}: {e}")
+
     async def run(self) -> None:
         while not self._stop.is_set():
             try:
@@ -650,4 +740,4 @@ class SignalEngine:
 
 
 __all__ = ["SignalEngine", "Sources", "Evaluation", "Det", "compute_features", "run_detectors", "score_signal",
-           "classify", "resample", "UNIVERSE_PARAMS", "DETECTORS", "BUY_WATCH", "SELL", "HOLD", "REJECT"]
+           "classify", "resample", "UNIVERSE_PARAMS", "DETECTORS", "BUY_WATCH", "SELL", "HOLD", "REJECT", "SHADOW"]

@@ -48,6 +48,8 @@ class PaperEngine:
         self.errors: deque = deque(maxlen=50)
         self._last_equity = 0.0
         self._last_fetch = 0.0
+        self._manage_lock = asyncio.Lock()
+        self.fast_prices: dict[str, tuple] = {}  # v1.1 FastPricer: mint -> (price, liquidity, source, ts)     # v1.1: the 1 s fast tick and the normal step both call manage()
         self.account()
 
     # ---------------------------------------------------------------- account
@@ -95,6 +97,11 @@ class PaperEngine:
             return False, "paused (/pause)"
         if (row.get("score") or 0) < s.min_trade_score:
             return False, f"score {row.get('score')} < MIN_TRADE_SCORE {s.min_trade_score}"
+        mcap, liq = row.get("mcap") or 0, row.get("liquidity") or 0     # v1.1 rule: only coins >= $1M (defence in depth)
+        if mcap < s.trade_min_mcap_usd:
+            return False, "mcap below TRADE_MIN_MCAP_USD"
+        if liq < s.trade_min_liq_usd or (s.trade_min_liq_mcap and liq / mcap < s.trade_min_liq_mcap):
+            return False, "liquidity below the trade floor"
         q = (report.data.get("quote") if report else None) or {}
         if not report or q.get("sellable") is not True or not report.quote_fresh(s.safety_quote_ttl_sec, now):
             return False, "no fresh sellable Jupiter quote"
@@ -231,14 +238,21 @@ class PaperEngine:
         return out
 
     async def manage(self) -> int:
+        async with self._manage_lock:
+            return await self._manage()
+
+    async def _manage(self) -> int:
         now = self.clock()
         opens = self.open_positions()
         prices: dict[str, tuple] = {}
         missing = []
         for p in opens:
             md = self.src.get_market(p["mint"]) if self.src else None
+            fp = self.fast_prices.get(p["mint"])
             if md and md.price_usd and (not md.updated_ts or now - md.updated_ts < 300):
                 prices[p["mint"]] = (md.price_usd, md.liquidity_usd, md.liquidity_source)
+            elif fp and now - fp[3] < 10:
+                prices[p["mint"]] = fp[:3]
             else:
                 missing.append(p["mint"])
         prices.update(await self._fetch_prices(missing))
@@ -263,12 +277,15 @@ class PaperEngine:
                 continue
             peak = max(p["peak_price"] or price, price)
             chg = (price / p["market_price"] - 1) * 100
+            reason = self.exit_reason({**p, "peak_price": peak}, price, now)
+            if not reason and price == p["last_price"] and peak == p["peak_price"] \
+                    and now - (p["last_price_ts"] or 0) < 15:
+                continue        # v1.1: 1 s ticks - unchanged price, no DB write (exits were still checked)
             with self.db.tx():
                 self.db.con.execute("UPDATE paper_positions SET last_price=?, last_price_ts=?, peak_price=?, "
                                     "max_up_pct=MAX(COALESCE(max_up_pct,0),?), max_down_pct=MIN(COALESCE(max_down_pct,0),?)"
                                     " WHERE id=?", (price, now, peak, chg, chg, p["id"]))
             p.update(last_price=price, peak_price=peak)
-            reason = self.exit_reason(p, price, now)
             if reason:
                 self.close(p, price, reason, liquidity_usd=liq)
                 closed += 1

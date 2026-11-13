@@ -9,6 +9,10 @@ re-activating an older version. Every signal stores the params_version it was pr
     early_entry         new launches only: early pump / first green candle / volume burst + buy pressure
     first_pullback      all universes: first 10-35% (new) / 3-12% (mcap/volume) pullback after an impulse, then a bounce
     migration_breakout  migrated pump.fun / launchpad coins breaking their post-migration high
+    momentum_breakout   v1.1, coins >= $1M: breakout above the lookback high confirmed by volume, buy pressure
+                        or the 5m candle, no exhaustion; tight trailing stop. Replay of the recorded 13 Nov data
+                        is SMALL (8-10 closed setups, 50-75% win, avg -2.2% .. +1.3%): a starting point for the
+                        learner / shadow tracking, not a proven edge.
 """
 from __future__ import annotations
 
@@ -25,7 +29,7 @@ DEFAULT_PARAMS: dict[str, dict] = {
     "early_entry": {
         "universes": [U_NEW],
         "params": {
-            U_NEW: {"min_score": 65, "max_age_min": 60, "max_ext_60m_pct": 150.0, "sl_pct": 12.0, "tp_pct": 30.0,
+            U_NEW: {"min_score": 70, "max_age_min": 60, "max_ext_60m_pct": 150.0, "sl_pct": 12.0, "tp_pct": 30.0,
                     "time_stop_min": 20, "need_pressure": True,
                     "trail_pct": 10.0, "trail_activate_pct": 15.0},
         },
@@ -52,6 +56,17 @@ DEFAULT_PARAMS: dict[str, dict] = {
                        "trail_pct": 6.0, "trail_activate_pct": 10.0},
         },
     },
+    "momentum_breakout": {
+        "universes": [U_NEW, U_MCAP, U_VOLUME],
+        "params": {
+            U_NEW: {"min_score": 60, "sl_pct": 10.0, "tp_pct": 15.0, "time_stop_min": 45,
+                    "trail_pct": 4.0, "trail_activate_pct": 7.0},
+            U_MCAP: {"min_score": 50, "sl_pct": 8.0, "tp_pct": 10.0, "time_stop_min": 120,
+                     "trail_pct": 3.0, "trail_activate_pct": 5.0},
+            U_VOLUME: {"min_score": 55, "sl_pct": 8.0, "tp_pct": 12.0, "time_stop_min": 90,
+                       "trail_pct": 3.5, "trail_activate_pct": 6.0},
+        },
+    },
 }
 STRATEGIES = tuple(DEFAULT_PARAMS)
 
@@ -60,9 +75,10 @@ TUNABLE: dict[str, tuple] = {
     "early_entry": ("sl_pct", "tp_pct", "time_stop_min", "trail_pct", "trail_activate_pct", "min_score"),
     "first_pullback": ("max_sl_pct", "tp_pct", "time_stop_min", "trail_pct", "trail_activate_pct", "min_score"),
     "migration_breakout": ("sl_pct", "tp_pct", "time_stop_min", "trail_pct", "trail_activate_pct", "min_score"),
+    "momentum_breakout": ("sl_pct", "tp_pct", "time_stop_min", "trail_pct", "trail_activate_pct", "min_score"),
 }
 LIMITS = {"sl_pct": (2.0, 30.0), "max_sl_pct": (2.0, 30.0), "tp_pct": (3.0, 200.0), "time_stop_min": (5, 240),
-          "trail_pct": (1.0, 40.0), "trail_activate_pct": (1.0, 100.0), "min_score": (60, 90)}
+          "trail_pct": (1.0, 40.0), "trail_activate_pct": (1.0, 100.0), "min_score": (45, 90)}
 
 
 @dataclass
@@ -107,6 +123,15 @@ class Strategy:
             if since is None or since > p["max_since_migration_min"]:
                 return False, "migration too long ago"
             return True, "post-migration breakout"
+        if self.name == "momentum_breakout":
+            if "breakout" not in fired:
+                return False, "no breakout"
+            if "pump_exhaustion" in fired:
+                return False, "exhaustion"
+            conf = ({"volume_increase", "buy_sell_pressure"} & fired) or ({"mtf"} if feat.get("mtf_up") else set())
+            if not conf:
+                return False, "breakout without volume / buy pressure / 5m confirmation"
+            return True, "breakout confirmed by " + ", ".join(sorted(conf))
         return False, "unknown strategy"
 
     def levels(self, universe: str, price: float, feat: dict) -> dict:
@@ -127,8 +152,33 @@ def ensure_defaults(db: Database) -> None:
             db.save_strategy_params(name, 1, d["params"], d["universes"], "default", note="phase 5 defaults")
 
 
+def migrate_v11(db: Database) -> list[str]:
+    """One-time: strategies still on their untouched phase-5 defaults get the v1.1 defaults as a new version
+    (e.g. early_entry min_score 65 -> 70: in the recorded watches score < 70 won 46%, 70-80 won 61-71%).
+    Learned versions are never overwritten. Recorded in strategy_updates, so /strategies shows it."""
+    if db.meta_get("migrated_v11") == "1":
+        return []
+    done = []
+    for name, d in DEFAULT_PARAMS.items():
+        cur = db.active_strategy_params(name)
+        if cur is None or cur.get("source") != "default" or cur["params"] == d["params"]:
+            continue
+        v = new_version(db, name, copy.deepcopy(d["params"]), "v1.1", note="v1.1 defaults (data-backed, 13 Nov analysis)")
+        changes = {f"{u}.{k}": [cur["params"].get(u, {}).get(k), val] for u, ps in d["params"].items()
+                   for k, val in ps.items() if cur["params"].get(u, {}).get(k) != val}   # same format as learning
+        db.add_strategy_update("param_change", name, cur["version"], v, changes,
+                               "v1.1 upgrade: stricter entry defaults from the 13 Nov win-rate analysis", {})
+        done.append(name)
+    db.meta_set("migrated_v11", "1")
+    return done
+
+
 def load_strategies(db: Database) -> dict[str, Strategy]:
     ensure_defaults(db)
+    try:
+        migrate_v11(db)
+    except Exception:  # noqa: BLE001  read-only views (reports/export) must still load strategies
+        pass
     out = {}
     for name in STRATEGIES:
         row = db.active_strategy_params(name)
@@ -159,4 +209,5 @@ def rollback(db: Database, name: str, version: int) -> None:
         db.con.execute("UPDATE strategy_params SET active=1 WHERE strategy=? AND version=?", (name, version))
 
 
-__all__ = ["Strategy", "DEFAULT_PARAMS", "STRATEGIES", "ensure_defaults", "load_strategies", "new_version", "rollback"]
+__all__ = ["Strategy", "DEFAULT_PARAMS", "STRATEGIES", "ensure_defaults", "load_strategies", "migrate_v11",
+           "new_version", "rollback"]

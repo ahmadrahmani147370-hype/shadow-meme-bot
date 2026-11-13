@@ -645,7 +645,7 @@ class Database:
         return [dict(r) for r in self.con.execute("SELECT * FROM signals WHERE status='open' ORDER BY ts")]
 
     def closed_signals(self, strategy: str | None = None, since_ts: float = 0) -> list[dict]:
-        q, a = "SELECT * FROM signals WHERE status='closed' AND ts>=?", [since_ts]
+        q, a = "SELECT * FROM signals WHERE status='closed' AND alert_type='BUY_WATCH' AND ts>=?", [since_ts]
         if strategy:
             q, a = q + " AND strategy=?", a + [strategy]
         return [dict(r) for r in self.con.execute(q + " ORDER BY exit_ts", a)]

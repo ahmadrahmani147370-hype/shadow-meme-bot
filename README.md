@@ -7,7 +7,7 @@ Solana meme coin scanner + **paper-trading** signal bot in Python, built for **A
 > private key, ever. `PAPER_ONLY` is a constant in the code; `.env` cannot turn it off.
 > Signals are not financial advice, and the bot reports only results it actually measured.
 
-## Status: v1.0.0 ✅ all 10 phases done (full test report: [docs/TEST_REPORT.md](docs/TEST_REPORT.md))
+## Status: v1.1.0 ✅ all 10 phases done + v1.1 accuracy update ([what changed](#v11---accuracy-update-13-nov-2026), [evidence](docs/V11_ANALYSIS.md), [v1.0 test report](docs/TEST_REPORT.md))
 
 | Phase | What | Status |
 |---|---|---|
@@ -50,6 +50,7 @@ git clone https://github.com/ahmadrahmani147370-hype/shadow-meme-bot && cd shado
 pip install -r requirements.txt && cp .env.example .env && nano .env      # TELEGRAM_BOT_TOKEN=...
 setsid nohup bash tools/box_run.sh >/dev/null 2>&1 &                       # start (background + watchdog)
 bash tools/box_stop.sh                                                     # stop
+bash tools/install_autostart.sh                                            # v1.1: restart after a box restart
 ```
 
 `tools/box_run.sh` writes the bot output to `logs/box_run.log` and its own events to `logs/watchdog.log`,
@@ -175,6 +176,36 @@ trades, strategies, updates) — market data bot khud chand minute mein dobara j
 Yaad rakhein: ye bot **sirf paper trading** karta hai. Na wallet, na private key, na asli paisa.
 Phone par 24 ghante lagatar chalne ki guarantee nahi — Android, battery aur network kabhi bhi rok sakte hain.
 `start.sh` crash ke baad khud dobara chalata hai, lekin phone band ho to bot bhi band hoga.
+
+## v1.1 - accuracy update (13 Nov 2026)
+
+Why: the box bot showed 1 win in 6 paper trades (17%). The analysis of every recorded run is in
+[docs/V11_ANALYSIS.md](docs/V11_ANALYSIS.md). The short version: **all** trades were new launches at
+$11k-53k market cap, and the losses were rugs (liquidity pulled in one step, nothing to exit into) plus stop
+losses that gapped. Fees were $0 and slippage normal (0.5-3%), so they were not the cause.
+
+| Rule | What the bot does now | Setting |
+|---|---|---|
+| Market cap >= $1M | Only coins >= $1M are traded. Smaller new launches are still scanned so a coin is ready when it crosses $1M; safety checks + scoring start at $750k. | `TRADE_MIN_MCAP_USD=1000000`, `EVAL_MIN_MCAP_USD=750000` |
+| Liquidity filters | Pool >= $50k and liquidity/mcap >= 2% (fake-supply coins showed $50M "mcap" on a $100k pool; every rugged ">= $1M" coin with a safety report failed safety or this ratio). | `TRADE_MIN_LIQ_USD`, `TRADE_MIN_LIQ_MCAP` |
+| Launch chaos | No trade in a coin's first 10 minutes. | `TRADE_MIN_AGE_MIN=10` |
+| 1000 coins/day | At most 1000 unique coins per PKT day get a safety check + scoring (open positions/watches are always managed). | `COINS_PER_DAY=1000` (0 = unlimited) |
+| Only BUY messages | Telegram pushes only "🟢 BUY" (a paper trade really opened). No SELL/HOLD/REJECT/close/digest/daily/strategy/online messages. Commands still answer, `/strategies` still shows the learning history. | `TELEGRAM_NOTIFY=buy` (`all` = v1.0 behaviour) |
+| ~1 s prices | Open positions, watches and near-trigger coins (max 30) are refreshed every second with one DexScreener batch call (own 70/min budget; slow lanes 180/min; total 250 < 300). Open positions/watches also get Jupiter price v3 every 5 s (DexScreener's own price only changes every ~30 s). SL/TP/trailing/time/rug exits run on every tick. Measured values are in `HEALTH` → `fast` and in `/status`. | `FAST_REFRESH_SEC=1`, `FAST_MAX_MINTS=30`, `FAST_JUP_SEC=5` |
+| Faster, safe self-learning | Minimum sample 12 closed trades (was 30) with a 4-trade test split, 3 h cooldown, but every measured gain is shrunk: `gain * n / (n + 20)`, so small samples need a much bigger edge. Near-miss setups (score up to 15 below `min_score`) are tracked virtually as `SHADOW` signals so the learner sees their real outcomes too (never traded, never notified). | `LEARN_MIN_TRADES=12`, `LEARN_SHRINK_K=20`, `SHADOW_TRACK=true` |
+| Stricter entries | `early_entry` min score 65 → 70 (recorded watches: score < 70 won 46%, 70-80 won 61-71%); live DB upgraded once, shown in `/strategies`. New `momentum_breakout` strategy for >= $1M coins (breakout + volume/pressure/5m confirmation, no exhaustion, trailing stop). `MIN_TRADE_SCORE` is now only a global floor (50); each strategy's own `min_score` decides. | strategy params (self-tuned) |
+
+Honest limits: in the recorded data only 27 coins were >= $1M in 3 hours, and the replay of the new >= $1M
+strategy has only 8-10 closed setups (50-75% win, average -2.2% to +1.3% depending on parameters). That is not
+a proven edge; expect **few** trades, and let the shadow tracking + learner gather evidence. No setting can
+make a meme-coin bot "100% accurate".
+
+**24/7 on the box:** `tools/box_run.sh` is the watchdog (restart on crash / hang). This box has no cron daemon
+and no systemd, so a real `@reboot` job is impossible. `bash tools/install_autostart.sh` adds a small hook
+at the top of `~/.bashrc` and `~/.profile` that runs `tools/ensure_running.sh` (idempotent, `flock`, silent)
+whenever a shell opens, so the bot restarts after a box restart as soon as any terminal/agent shell starts.
+`bash tools/box_stop.sh` disables the hook until `box_run.sh` is started again (`logs/NO_AUTOSTART`).
+`bash tools/ensure_running.sh -v` shows the state. While the box itself is suspended nothing can run.
 
 ## Token scanner (phase 2)
 

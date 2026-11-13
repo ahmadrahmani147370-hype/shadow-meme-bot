@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Stop the box watchdog and the bot cleanly (SIGTERM -> bot saves state and exits).
 cd "$(dirname "$0")/.." || exit 1
+# A manual stop disables the shell-hook autostart (tools/ensure_running.sh) until box_run.sh is started again.
+[ "${1:-}" = "--keep-autostart" ] || { mkdir -p logs; touch logs/NO_AUTOSTART; }
 if [ -f logs/watchdog.pid ] && kill -0 "$(cat logs/watchdog.pid)" 2>/dev/null; then
   kill -TERM "$(cat logs/watchdog.pid)"; echo "watchdog $(cat logs/watchdog.pid) stopping"
 else

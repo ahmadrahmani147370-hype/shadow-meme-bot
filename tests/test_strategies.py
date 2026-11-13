@@ -11,12 +11,12 @@ def det(*names):
 def test_defaults_seeded_once_and_versioned(tmp_path):
     db = Database(str(tmp_path / "s.db"))
     st = load_strategies(db)
-    assert set(st) == {"early_entry", "first_pullback", "migration_breakout"}
+    assert set(st) == {"early_entry", "first_pullback", "migration_breakout", "momentum_breakout"}
     assert all(s.version == 1 for s in st.values())
     assert st["early_entry"].applies("new") and not st["early_entry"].applies("mcap")
     assert st["first_pullback"].applies("mcap") and st["first_pullback"].applies("volume")
     load_strategies(db)
-    assert db.con.execute("SELECT count(*) FROM strategy_params").fetchone()[0] == 3
+    assert db.con.execute("SELECT count(*) FROM strategy_params").fetchone()[0] == 4
     p = dict(DEFAULT_PARAMS["first_pullback"]["params"])
     p["mcap"] = dict(p["mcap"], tp_pct=12.0)
     v = new_version(db, "first_pullback", p, "learned", "tp 10->12")

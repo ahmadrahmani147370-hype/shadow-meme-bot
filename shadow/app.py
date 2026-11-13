@@ -20,8 +20,10 @@ from . import dashboard as dash
 from .collector import Collector
 from .config import Settings
 from .db import Database
+from .fastprice import FastPricer
 from .judge import Judge
 from .learning import Learner
+from .limits import DailyCap
 from .maintenance import Maintenance, consistency
 from .net import UA, make_limiters
 from .paper import PaperEngine
@@ -54,8 +56,11 @@ class App:
         self.paper = PaperEngine(s, self.db, src=self.src, checker=self.chk, limiters=lim, client=self.client,
                                  on_trade=self._on_trade)
         self.learner = Learner(s, self.db, judge=self.judge)
+        self.cap = DailyCap(self.db, s.coins_per_day)
         self.eng = SignalEngine(s, self.db, self.src, checker=self.chk, judge=self.judge, paper=self.paper,
-                                on_signal=self._on_signal)
+                                on_signal=self._on_signal, cap=self.cap)
+        self.chk.gate_fn = self.eng.eval_allowed       # v1.1: safety checks only coins near/above $1M, under the cap
+        self.fast = FastPricer(s, self.src, self.eng, client=self.client, limiters=lim)
         self.maint = Maintenance(s, self.db)
         self.bot = None
         if telegram and (s.telegram_bot_token or s.tg_log_only):
@@ -106,6 +111,7 @@ class App:
                 "approve": st["judge_APPROVE"], "veto": st["judge_VETO"], "sell": st["alert_SELL"],
                 "reject": st["alert_REJECT"], "equity": e["equity"], "cash": e["cash"], "n_open": e["n_open"],
                 "realized_pnl": e["realized_pnl"], "db_mb": db_mb,
+                "coins_today": self.cap.used, "coins_cap": self.cap.cap, "fast": self.fast.stats(),
                 "strategies": {k: v.version for k, v in self.eng.strategies.items()}}
 
     def scanner_status(self) -> dict:
@@ -235,7 +241,9 @@ class App:
              "paper": {"equity": round(e["equity"], 2), "open": e["n_open"], "opened": self.paper.stats["opened"],
                        "closed": self.paper.stats["closed"]},
              "api": limiter_stats(self.limiters), "scanner_errors": len(self.scanner.errors),
-             "ws_mode": self.scanner.mode, "loop_lag_ms": getattr(self, "_lag_ms", None)}
+             "ws_mode": self.scanner.mode, "loop_lag_ms": getattr(self, "_lag_ms", None),
+             "fast": self.fast.stats(), "cap": self.cap.snapshot(),
+             "gate": {k: v for k, v in st.items() if k.startswith(("skip_", "gate_")) or k == "shadow_tracked"}}
         if self.bot:
             d["telegram"] = {"queue": len(self.bot.queue), "sent": self.bot.stats["sent"],
                              "dropped": self.bot.stats["dropped"], "reachable": self.api.reachable}
@@ -263,7 +271,8 @@ class App:
                 self.request_stop()
                 return
 
-    CORE_TASKS = ("collector", "safety", "signals", "universes", "telegram", "learning", "maintenance", "dashboard")
+    CORE_TASKS = ("collector", "safety", "signals", "universes", "telegram", "learning", "maintenance", "dashboard",
+                  "fastprice")
 
     def request_stop(self) -> None:
         self.stop_event.set()
@@ -283,7 +292,8 @@ class App:
                  asyncio.create_task(self._learn_loop(), name="learning"),
                  asyncio.create_task(self.maint.run(maint_stop, initial_delay=min(60.0, self.s.maintenance_sec)),
                                      name="maintenance"),
-                 asyncio.create_task(self._dashboard_loop(), name="dashboard")]
+                 asyncio.create_task(self._dashboard_loop(), name="dashboard"),
+                 asyncio.create_task(self.fast.run(), name="fastprice")]
         if self.uni:
             tasks.append(asyncio.create_task(self.uni.run(), name="universes"))
         self.exit_code = 0

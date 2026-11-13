@@ -5,8 +5,11 @@ followed for 2x the time stop, >= 60 min). A path lets us replay ANY exit params
 params are compared on the same real opportunities, after fees and slippage.
 
 Guardrails (all in .env):
-  * minimum sample size: LEARN_MIN_TRADES closed watches per strategy+universe (LEARN_MIN_TEST of them
-    in the newest part);
+  * minimum sample size: LEARN_MIN_TRADES closed samples per strategy+universe (LEARN_MIN_TEST of them
+    in the newest part). v1.1: samples = every BUY WATCH (approved or vetoed) AND every SHADOW near miss
+    (setup present, safety PASS, score up to SHADOW_SCORE_MARGIN under min_score), so learning sees what a
+    lower min_score would have done; gains are shrunk by n/(n+LEARN_SHRINK_K) so small samples need
+    proportionally bigger, out-of-sample-confirmed improvements;
   * walk-forward: the oldest LEARN_TRAIN_FRAC of samples chooses a candidate, the newest part (never
     seen while choosing) must confirm it; both must beat the current params by LEARN_MIN_IMPROVE_PCT;
   * bounded change: one param per step, at most LEARN_MAX_STEP_PCT, inside hard limits;
@@ -102,6 +105,14 @@ def candidates(cur: dict, keys: tuple, limits: dict, step_pct: float) -> list[tu
     return out
 
 
+def shrink(gain: float | None, n: int, k: float) -> float | None:
+    """v1.1: James-Stein style shrinkage toward 'no change': a gain measured on n samples counts n/(n+k) of
+    itself. With k=20, 12 samples need a raw gain 2.7x the threshold, 60 samples only 1.33x."""
+    if gain is None:
+        return None
+    return gain * n / (n + k) if k > 0 else gain
+
+
 def walk_forward(samples: list[dict], train_frac: float) -> tuple[list, list]:
     samples = sorted(samples, key=lambda x: x["ts"])
     k = int(len(samples) * train_frac)
@@ -111,7 +122,8 @@ def walk_forward(samples: list[dict], train_frac: float) -> tuple[list, list]:
 # ---------------------------------------------------------------- samples
 def strategy_samples(db: Database, strategy: str, universe: str, version: int | None = None,
                      since_ts: float = 0) -> list[dict]:
-    q = ("SELECT id, ts, score, entry, sl, path_json, params_version, judge_verdict FROM signals WHERE alert_type='BUY_WATCH'"
+    q = ("SELECT id, ts, score, entry, sl, path_json, params_version, judge_verdict FROM signals "
+         "WHERE alert_type IN ('BUY_WATCH','SHADOW')"
          " AND strategy=? AND universe=? AND path_json IS NOT NULL AND ts>=?")
     a = [strategy, universe, since_ts]
     if version is not None:
@@ -236,10 +248,13 @@ class Learner:
             for k, old, new in candidates(cur, TUNABLE[name], LIMITS, s.learn_max_step_pct):
                 cand = {**cur, k: new}
                 tr = evaluate(name, cand, train, costs)
-                if tr["score"] is None or tr["score"] - base_tr["score"] < s.learn_min_improve_pct:
+                if tr["score"] is None:
                     continue
-                if best is None or tr["score"] - base_tr["score"] > best["gain"]:
-                    best = {"universe": u, "k": k, "old": old, "new": new, "gain": tr["score"] - base_tr["score"],
+                g = shrink(tr["score"] - base_tr["score"], tr["n"], s.learn_shrink_k)
+                if g < s.learn_min_improve_pct:
+                    continue
+                if best is None or g > best["gain"]:
+                    best = {"universe": u, "k": k, "old": old, "new": new, "gain": g,
                             "train": (base_tr, tr), "cand": cand, "test": test, "base_te": base_te}
         if best is None:
             if evaluated:
@@ -250,7 +265,7 @@ class Learner:
         metrics = {"before": {"train": best["train"][0], "test": base_te}, "after": {"train": best["train"][1], "test": te},
                    "cost_pct": costs, "universe": best["universe"]}
         change = {f"{best['universe']}.{best['k']}": [best["old"], best["new"]]}
-        if te["score"] is None or te["score"] - base_te["score"] < s.learn_min_improve_pct:
+        if te["score"] is None or shrink(te["score"] - base_te["score"], te["n"], s.learn_shrink_k) < s.learn_min_improve_pct:
             self._log(name, "rejected_out_of_sample", f"{best['universe']}.{best['k']} {best['old']}->{best['new']} "
                       f"helped on train but not on the newest {te['n']} samples", metrics, change, st.version)
             out.append({"target": name, "action": "rejected_out_of_sample", "change": change})
@@ -350,7 +365,7 @@ class Learner:
         for k, old, new in candidates(cur, JUDGE_TUNABLE, JUDGE_LIMITS, s.learn_max_step_pct):
             cand = {**cur, k: new}
             tr = judge_eval(cand, train, costs)
-            gain = (tr["score"] or 0) - (btr["score"] or 0)
+            gain = shrink((tr["score"] or 0) - (btr["score"] or 0), len(train), s.learn_shrink_k)
             if gain >= s.learn_min_improve_pct and (best is None or gain > best[0]):
                 best = (gain, k, old, new, cand, tr)
         if best is None:
@@ -358,7 +373,7 @@ class Learner:
         _, k, old, new, cand, tr = best
         te = judge_eval(cand, test, costs)
         metrics = {"before": {"train": btr, "test": bte}, "after": {"train": tr, "test": te}, "cost_pct": costs}
-        if (te["score"] or 0) - (bte["score"] or 0) < s.learn_min_improve_pct:
+        if shrink((te["score"] or 0) - (bte["score"] or 0), len(test), s.learn_shrink_k) < s.learn_min_improve_pct:
             self._log("judge", "rejected_out_of_sample", f"{k} {old}->{new} not confirmed on the newest {te['n']}",
                       metrics, {k: [old, new]}, row["version"])
             return {"target": "judge", "action": "rejected_out_of_sample"}
