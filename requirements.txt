@@ -1,0 +1,8 @@
+# Pure-Python, Termux-friendly runtime deps (no Rust, no heavy native builds).
+httpx>=0.27,<1
+websockets>=12
+python-dotenv>=1.0
+# pandas and numpy: on Termux install the prebuilt packages instead of pip:
+#   pkg install python-numpy tur-repo && pkg install python-pandas
+# On a normal PC/Linux, pip is fine:
+#   pip install pandas numpy
