@@ -500,8 +500,14 @@ class Collector:
 
     # ---- maintenance
     def cleanup(self) -> dict:
-        out = self.db.cleanup(self.s.snapshot_retention_h, self.s.candle_retention_h, self.s.market_retention_d,
-                              self.s.seen_retention_d)
+        s = self.s
+        out = self.db.cleanup(s.snapshot_retention_h, s.candle_retention_h, s.market_retention_d, s.seen_retention_d,
+                              signal_retention_d=s.signal_retention_d,
+                              signal_reject_retention_d=s.signal_reject_retention_d,
+                              signal_detail_retention_h=s.signal_detail_retention_h,
+                              paper_equity_retention_d=s.paper_equity_retention_d,
+                              creator_blacklist_retention_d=s.creator_blacklist_retention_d,
+                              seen_raw_retention_h=s.seen_raw_retention_h)
         self.stats["cleanup_runs"] += 1
         return out
 

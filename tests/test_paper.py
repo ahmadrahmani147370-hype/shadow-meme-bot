@@ -51,8 +51,24 @@ def make(tmp_path, **env):
     return s, db, pe, src, chk, clock
 
 
-def test_open_close_accounting_with_fees_and_slippage(tmp_path):
+def test_default_has_no_fees_only_quote_slippage(tmp_path):
     s, db, pe, src, chk, clock = make(tmp_path)
+    assert s.paper_buy_fee == 0 and s.paper_sell_fee == 0
+    m = "Z" * 44
+    chk.reps[m] = rep(m, impact=1.2)
+    pid = pe.open_from_signal(sig(m), chk.reps[m], PARAMS)
+    assert pe.account()["cash"] == pytest.approx(98.0) and pe.account()["fees_paid"] == 0
+    clock["t"] = NOW + 60
+    chk.reps[m] = rep(m, impact=2.0, now=clock["t"])
+    src.mk[m] = MarketData(m, price_usd=1.35, updated_ts=NOW + 60)
+    asyncio.run(pe.manage())
+    p = pe.get(pid)
+    assert p["pnl_usd"] == pytest.approx(2 / 1.012 * 1.35 * 0.98 - 2) and p["buy_fee"] == 0 and p["sell_fee"] == 0
+    assert pe.account()["cash"] == pytest.approx(100 + p["pnl_usd"])
+
+
+def test_open_close_accounting_with_fees_and_slippage(tmp_path):
+    s, db, pe, src, chk, clock = make(tmp_path, paper_buy_fee=0.5, paper_sell_fee=0.5)  # fees still configurable
     m = "A" * 44
     chk.reps[m] = rep(m, impact=1.2)
     pid = pe.open_from_signal(sig(m), chk.reps[m], PARAMS)
@@ -169,9 +185,66 @@ def test_report_texts(tmp_path):
     clock["t"] = NOW + 30
     asyncio.run(pe.manage())
     d = paper_stats(db, s, clock["t"])
-    assert d["closed"]["n"] == 1 and d["n_open"] == 1 and d["fees_paid"] == pytest.approx(1.5)
+    assert d["closed"]["n"] == 1 and d["n_open"] == 1 and d["fees_paid"] == pytest.approx(0.0)
     assert d["equity"] == pytest.approx(d["cash"] + 2 / 1.012 * 1.1)
     assert "Closed trades 1" in paper_text(db, s, clock["t"]) and "Open 1/5" in paper_text(db, s, clock["t"])
     assert "NNNN" in positions_text(db, clock["t"]) and "LLLL" in history_text(db) and "stop_loss" in history_text(db)
     assert "closed 1" in report_text(db, s, clock["t"])
     assert "early_entry v1" in strategies_text(db, s) and "judge v1" in strategies_text(db, s)
+
+
+# ---- phase 7 fix: drained pools (real numbers from the 13 Nov 2026 live run, BTCCNDL)
+def _btccndl(tmp_path):
+    s, db, pe, src, chk, clock = make(tmp_path)
+    m = "BN9e4ESnzZhFZwLi7XvC1y1xnZEDuMmTSQGiURrypump"
+    chk.reps[m] = rep(m, impact=0.5)
+    pid = pe.open_from_signal(sig(m, price=6.298e-05, sl=5.6988e-05, tp=8.5482e-05), chk.reps[m], PARAMS)
+    return s, db, pe, src, chk, clock, m, pid
+
+
+def test_drained_pool_is_a_rug_loss_not_a_take_profit(tmp_path):
+    from shadow.maintenance import consistency
+    s, db, pe, src, chk, clock, m, pid = _btccndl(tmp_path)
+    clock["t"] = NOW + 60
+    src.mk[m] = MarketData(m, price_usd=6.775e-05, liquidity_usd=0.11, liquidity_source="dexscreener", updated_ts=NOW + 60)
+    asyncio.run(pe.manage())
+    p = pe.get(pid)
+    assert p["status"] == "closed" and p["exit_reason"] == "liquidity_gone"
+    assert p["proceeds"] < 0.055 and p["pnl_usd"] < -1.94  # ~ -$2 of a $2 trade (no fees by default)
+    assert consistency(db)["ok"]
+
+
+def test_dust_price_after_drain_never_books_a_profit(tmp_path):
+    s, db, pe, src, chk, clock, m, pid = _btccndl(tmp_path)
+    clock["t"] = NOW + 60
+    # the live tick: price 95.27 USD (+150,000,000%) with $9.93 liquidity
+    src.mk[m] = MarketData(m, price_usd=95.27, liquidity_usd=9.93, liquidity_source="dexscreener", updated_ts=NOW + 60)
+    asyncio.run(pe.manage())
+    p = pe.get(pid)
+    assert p["exit_reason"] == "liquidity_gone" and p["pnl_usd"] < 0
+    assert p["proceeds"] <= p["qty"] * 6.298e-05 + 1e-9  # valued at the last trusted price at most
+
+
+def test_implausible_jump_is_ignored_and_estimated_liquidity_is_no_rug(tmp_path):
+    s, db, pe, src, chk, clock, m, pid = _btccndl(tmp_path)
+    clock["t"] = NOW + 60
+    src.mk[m] = MarketData(m, price_usd=6.298e-05 * 1000, liquidity_usd=50000, liquidity_source="dexscreener",
+                           updated_ts=NOW + 60)
+    asyncio.run(pe.manage())
+    assert pe.get(pid)["status"] == "open" and pe.stats["price_spikes_ignored"] == 1
+    clock["t"] = NOW + 120
+    # Jupiter's liquidity fill-in for bonding-curve coins (~$100) is an estimate -> not a rug signal
+    src.mk[m] = MarketData(m, price_usd=6.4e-05, liquidity_usd=94.0, liquidity_source="jupiter", updated_ts=NOW + 120)
+    asyncio.run(pe.manage())
+    assert pe.get(pid)["status"] == "open"
+
+
+def test_pricing_helpers():
+    from shadow.pricing import capped_value, drained, implausible_jump, rug_pnl_pct
+    assert drained(0.11, 500) and not drained(None, 500) and not drained(94, 500, "jupiter")
+    assert implausible_jump(6.775e-05, 95.27, 50) and not implausible_jump(1.0, 1.4, 50)
+    assert capped_value(1000.0, 9.93) == pytest.approx(4.965) and capped_value(2.0, None) == 2.0
+    from shadow.pricing import amm_out
+    v = 2.0 * 6.775e-05 / 6.298e-05
+    assert rug_pnl_pct(6.298e-05, 6.775e-05, 2.0, 0.11) == pytest.approx((0.055 * v / (0.055 + v) / 2 - 1) * 100)
+    assert amm_out(2.0, 9.93) == pytest.approx(4.965 * 2 / 6.965) and amm_out(2.0, 1e6) == pytest.approx(2.0, rel=1e-5)

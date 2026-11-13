@@ -53,7 +53,16 @@ def _print_trade(kind: str, p: dict) -> None:
 
 async def run_signals(s: Settings, seconds: float = 600, quiet_rejects: bool = False, with_paper: bool = False) -> dict:
     path = str(s.path(s.db_path))
-    db = Database(path)
+    db = Database(path, busy_timeout_ms=s.db_busy_timeout_ms)
+    db.acquire_writer_lock()  # single writer: a second bot on the same DB stops here (WriterLocked)
+    from .maintenance import Maintenance, consistency, file_bytes, integrity_check, projection
+    maint = Maintenance(s, db)
+    maint_stop = asyncio.Event()
+    cons0 = consistency(db)
+    if not cons0["ok"]:
+        print(f"!! database consistency problems at start: {cons0['problems']}", flush=True)
+    db.con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    fb0 = file_bytes(db)
     limiters = make_limiters()
     sc = Scanner(s, db, limiters=limiters)
     col = Collector(s, db, limiters=limiters)
@@ -98,6 +107,7 @@ async def run_signals(s: Settings, seconds: float = 600, quiet_rejects: bool = F
 
     if learner is not None:
         tasks.append(asyncio.create_task(learn_loop()))
+    tasks.append(asyncio.create_task(maint.run(maint_stop, initial_delay=min(60.0, s.maintenance_sec))))
 
     async def status():
         nonlocal cpu_prev, t_prev
@@ -130,6 +140,7 @@ async def run_signals(s: Settings, seconds: float = 600, quiet_rejects: bool = F
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
     finally:
+        maint_stop.set()
         for x in (eng, chk, col, sc) + ((uni,) if uni else ()):
             await x.stop()
         for t in tasks:
@@ -197,6 +208,24 @@ async def run_signals(s: Settings, seconds: float = 600, quiet_rejects: bool = F
           f"{(cur_kb or 0) / 1024:.1f} MB, peak {max(peak_kb, cur_kb or 0) / 1024:.1f} MB")
     print(f"== database (after WAL checkpoint) == {db0 / 1e6:.2f} MB -> {db1 / 1e6:.2f} MB")
     print(f"  tables {db.table_counts()}")
+    db.con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    fb1 = file_bytes(db)
+    hours = max(wall / 3600, 1e-9)
+    print("== database growth (phase 7) ==")
+    print(f"  used {fb0['used'] / 1e6:.2f} MB -> {fb1['used'] / 1e6:.2f} MB = {(fb1['used'] - fb0['used']) / 1e6 / hours:+.1f} "
+          f"MB/hour net (file {fb1['file'] / 1e6:.2f} MB, free {fb1['free_pct']:.1f}%, WAL {fb1['wal'] / 1e6:.2f} MB)")
+    pj = projection(db, s, since_ts=wall0)
+    print(f"  projected size after N days (rates from {pj['hours'] * 60:.0f} min, sizes via {pj['method']}): "
+          + ", ".join(f"{d}d {v} MB" for d, v in pj["size_at_days"].items())
+          + f" | steady (90d) ~{pj['steady_mb']} MB, cap DB_MAX_MB={s.db_max_mb:g} | kept-forever tables "
+          f"+{pj['forever_mb_per_year']} MB/year")
+    for r in pj["tables"][:12]:
+        ret = "forever" if r["forever"] else f"{r['retention_h']:g}h"
+        print(f"    {r['table']:<36} {r['rows_per_h']:>9}/h x {ret:>7} x {r['bytes_per_row']:>5} B = "
+              f"{r['steady_mb']:>6} MB at 90 days")
+    cons1 = consistency(db)
+    print(f"  maintenance {dict(maint.stats)} errors {maint.errors[-3:]} | integrity {integrity_check(db, quick=True)} | "
+          f"consistency {'OK' if cons1['ok'] else cons1['problems']} {cons1['facts']}")
     if with_paper:
         from .learning import cost_pct, judge_stats
         from .reports import history_text, paper_text, positions_text, report_text, strategies_text

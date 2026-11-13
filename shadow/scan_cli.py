@@ -30,6 +30,7 @@ def _fmt(ev) -> str:
 
 async def run_scan(s: Settings, seconds: float = 60, force_fallback: bool = False, quiet: bool = False) -> dict:
     db = Database(s.path(s.db_path))
+    db.acquire_writer_lock()
     before = db.count_seen().get("total", 0)
     sc = Scanner(s, db, force_fallback=force_fallback)
     print(f"SHADOW MEME scanner - {seconds:.0f}s, {'FORCED FALLBACK' if force_fallback else ('websocket + always-on polling' if s.scanner_poll_always else 'websocket + auto fallback')}; "

@@ -19,6 +19,7 @@ from .config import Settings
 from .db import Database
 from .learning import cost_pct, judge_stats
 from .paper import day_start
+from .timeutil import fmt as _tfmt
 from .strategies import STRATEGIES, load_strategies
 
 PHASE = 6
@@ -34,7 +35,7 @@ def _pct(x: float | None, sign: bool = True) -> str:
 
 
 def _t(ts: float | None) -> str:
-    return time.strftime("%d %b %H:%M", time.localtime(ts)) if ts else "-"
+    return _tfmt(ts, "%d %b %H:%M")
 
 
 def _closed(db: Database, since_ts: float = 0) -> list[dict]:
@@ -141,7 +142,7 @@ def report_stats(db: Database, s: Settings, now: float | None = None) -> dict:
 def report_text(db: Database, s: Settings, now: float | None = None) -> str:
     d = report_stats(db, s, now)
     c, j = d["closed_today"], d["judge"]
-    lines = [f"📊 DAILY REPORT {time.strftime('%d %b %Y', time.localtime(d['since']))} (paper only)",
+    lines = [f"📊 DAILY REPORT {_tfmt(d['since'] + 3600, '%d %b %Y')} (paper only)",
              f"Trades opened {d['paper']['trades_today']}/{d['paper']['daily_target']} | closed {c['n']} | wins {c['wins']} | "
              f"P&L after fees {_usd(c['pnl_usd'])} (gross {_usd(c['gross_usd'])}, fees {_usd(c['fees_usd'])})",
              f"Equity {_usd(d['paper']['equity'])} | open {d['paper']['n_open']}"]

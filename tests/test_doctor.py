@@ -176,6 +176,9 @@ def test_stubs_are_marked():
     for mod in ("paper", "learning", "reports"):                      # phase 6: implemented
         m = importlib.import_module(f"shadow.{mod}")
         assert m.PHASE == 6 and m.IMPLEMENTED is True
+    for mod in ("db", "maintenance", "export"):                       # phase 7: implemented
+        m = importlib.import_module(f"shadow.{mod}")
+        assert m.PHASE == 7 and m.IMPLEMENTED is True
     for mod, ph in [("telegram_bot", 8), ("dashboard", 9)]:
         m = importlib.import_module(f"shadow.{mod}")
         assert m.PHASE == ph and m.IMPLEMENTED is False

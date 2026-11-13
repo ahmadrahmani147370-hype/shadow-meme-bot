@@ -11,7 +11,9 @@ def test_defaults_match_spec():
     assert s.paper_only is True and PAPER_ONLY is True
     assert s.paper_start_balance == 100.0
     assert s.paper_trade_size == 2.0
-    assert s.paper_buy_fee == 0.50 and s.paper_sell_fee == 0.50
+    assert s.paper_buy_fee == 0.0 and s.paper_sell_fee == 0.0  # no fees by default (Ahmed, phase 7)
+    s2 = load_settings(env={"PAPER_BUY_FEE": "0.5", "PAPER_SELL_FEE": "0.25"})
+    assert s2.paper_buy_fee == 0.5 and s2.paper_sell_fee == 0.25  # still configurable
     assert s.paper_max_open == 5
     assert s.paper_daily_target == 50
     assert s.min_trade_score == 65

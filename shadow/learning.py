@@ -260,9 +260,10 @@ class Learner:
         reason = (f"{best['universe']} {best['k']} {best['old']} -> {best['new']}: mean net per opportunity "
                   f"{base_te['score']:+.2f}% -> {te['score']:+.2f}% on the newest {te['n']} samples "
                   f"(train {best['train'][0]['score']:+.2f}% -> {best['train'][1]['score']:+.2f}% on {best['train'][0]['n']})")
-        v = new_version(self.db, name, params, "learned", note=reason)
-        self._log(name, "activate", reason, metrics, change, st.version, v)
-        self.db.add_strategy_update("param_change", name, st.version, v, change, reason, metrics, ts=self.clock())
+        with self.db.tx():  # version + change log + notification: all or nothing (crash-safe)
+            v = new_version(self.db, name, params, "learned", note=reason)
+            self._log(name, "activate", reason, metrics, change, st.version, v)
+            self.db.add_strategy_update("param_change", name, st.version, v, change, reason, metrics, ts=self.clock())
         out.append({"target": name, "action": "activate", "version": v, "change": change, "reason": reason})
         return out
 
@@ -291,16 +292,17 @@ class Learner:
         metrics = {"before": {"version": parent["version"], "score": old_m, "n": n},
                    "after": {"version": row["version"], "score": new_m, "n": n}, "per_universe": per, "cost_pct": costs}
         if new_m < old_m - self.s.learn_rollback_margin_pct:
-            rollback(self.db, name, parent["version"])
-            changes = diff_params(st.params, pst.params)
-            reason = (f"v{row['version']} did worse live than v{parent['version']} on the same {n} watches: "
-                      f"{new_m:+.2f}% vs {old_m:+.2f}% net per opportunity -> back to v{parent['version']}")
-            self._log(name, "rollback", reason, metrics, changes, row["version"], parent["version"])
-            self.db.add_strategy_update("rollback", name, row["version"], parent["version"], changes, reason, metrics,
-                                        ts=self.clock())
+            with self.db.tx():  # version + change log + notification: all or nothing (crash-safe)
+                rollback(self.db, name, parent["version"])
+                changes = diff_params(st.params, pst.params)
+                reason = (f"v{row['version']} did worse live than v{parent['version']} on the same {n} watches: "
+                          f"{new_m:+.2f}% vs {old_m:+.2f}% net per opportunity -> back to v{parent['version']}")
+                self._log(name, "rollback", reason, metrics, changes, row["version"], parent["version"])
+                self.db.add_strategy_update("rollback", name, row["version"], parent["version"], changes, reason, metrics,
+                                            ts=self.clock())
             return {"target": name, "action": "rollback", "version": parent["version"], "reason": reason}
         # probation passed: mark it so it is not re-judged every run
-        with self.db.con:
+        with self.db.tx():
             self.db.con.execute("UPDATE strategy_params SET source='learned_confirmed' WHERE strategy=? AND version=?",
                                 (name, row["version"]))
         self._log(name, "confirmed", f"v{row['version']} kept: {new_m:+.2f}% vs parent {old_m:+.2f}% on {n} live watches",
@@ -322,16 +324,17 @@ class Learner:
                 metrics = {"before": {"version": parent["version"], **b}, "after": {"version": row["version"], **a},
                            "cost_pct": costs}
                 if (a["score"] or 0) < (b["score"] or 0) - s.learn_rollback_margin_pct:
-                    rollback(self.db, "judge", parent["version"])
-                    changes = {k: [cur[k], P_old[k]] for k in JUDGE_TUNABLE if cur[k] != P_old[k]}
-                    reason = (f"judge thresholds v{row['version']} did worse than v{parent['version']} on the same "
-                              f"{a['n']} signals ({a['score']:+.2f}% vs {b['score']:+.2f}% net per signal)")
-                    self._log("judge", "rollback", reason, metrics, changes, row["version"], parent["version"])
-                    self.db.add_strategy_update("judge_rollback", "judge", row["version"], parent["version"], changes,
-                                                reason, metrics, ts=self.clock())
+                    with self.db.tx():  # version + change log + notification: all or nothing (crash-safe)
+                        rollback(self.db, "judge", parent["version"])
+                        changes = {k: [cur[k], P_old[k]] for k in JUDGE_TUNABLE if cur[k] != P_old[k]}
+                        reason = (f"judge thresholds v{row['version']} did worse than v{parent['version']} on the same "
+                                  f"{a['n']} signals ({a['score']:+.2f}% vs {b['score']:+.2f}% net per signal)")
+                        self._log("judge", "rollback", reason, metrics, changes, row["version"], parent["version"])
+                        self.db.add_strategy_update("judge_rollback", "judge", row["version"], parent["version"], changes,
+                                                    reason, metrics, ts=self.clock())
                     self._reload_judge()
                     return {"target": "judge", "action": "rollback", "reason": reason}
-                with self.db.con:
+                with self.db.tx():
                     self.db.con.execute("UPDATE strategy_params SET source='learned_confirmed' WHERE strategy='judge' "
                                         "AND version=?", (row["version"],))
         if not s.judge_tuning_enabled:
@@ -361,10 +364,11 @@ class Learner:
             return {"target": "judge", "action": "rejected_out_of_sample"}
         reason = (f"judge {k} {old} -> {new}: net per signal {bte['score']:+.2f}% -> {te['score']:+.2f}% on the newest "
                   f"{te['n']} signals (train {btr['score']:+.2f}% -> {tr['score']:+.2f}% on {tr['n']})")
-        v = new_version(self.db, "judge", cand, "learned", note=reason)
-        self._log("judge", "activate", reason, metrics, {k: [old, new]}, row["version"], v)
-        self.db.add_strategy_update("judge_change", "judge", row["version"], v, {k: [old, new]}, reason, metrics,
-                                    ts=self.clock())
+        with self.db.tx():  # version + change log + notification: all or nothing (crash-safe)
+            v = new_version(self.db, "judge", cand, "learned", note=reason)
+            self._log("judge", "activate", reason, metrics, {k: [old, new]}, row["version"], v)
+            self.db.add_strategy_update("judge_change", "judge", row["version"], v, {k: [old, new]}, reason, metrics,
+                                        ts=self.clock())
         self._reload_judge()
         return {"target": "judge", "action": "activate", "version": v, "reason": reason}
 

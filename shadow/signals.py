@@ -24,6 +24,7 @@ import time
 from collections import Counter, deque
 from dataclasses import asdict, dataclass, field
 
+from .pricing import drained, implausible_jump, rug_pnl_pct
 from .config import Settings
 from .db import Database
 from .models import MIGRATED, U_MCAP, U_NEW, U_VOLUME, Candle, MarketData
@@ -373,6 +374,13 @@ class SignalEngine:
             ev = evals.get(pth["mint"])
             md = self.src.get_market(pth["mint"])
             price = (ev.features.get("price") if ev else None) or (md.price_usd if md else None)
+            liq = md.liquidity_usd if md else None
+            if price and drained(liq, self.s.paper_rug_liquidity_usd, md.liquidity_source if md else None):
+                last = pth["pts"][-1][1] if pth["pts"] else pth["entry"]
+                price = pth["entry"] * (1 + rug_pnl_pct(pth["entry"], last, self.s.paper_trade_size, liq) / 100)
+            elif price and implausible_jump(pth["pts"][-1][1] if pth["pts"] else pth["entry"], price,
+                                            self.s.paper_max_price_jump):
+                price = None
             if price and now - pth["last"] >= self.PATH_EVERY_SEC:
                 pth["pts"].append([round(now - pth["ts"]), price])
                 pth["last"], pth["seen"] = now, now
@@ -524,6 +532,19 @@ class SignalEngine:
             ev = evals.get(o["mint"])
             md = self.src.get_market(o["mint"])
             price = (ev.features.get("price") if ev else None) or (md.price_usd if md else None)
+            liq = md.liquidity_usd if md else None
+            if price and drained(liq, self.s.paper_rug_liquidity_usd, md.liquidity_source if md else None):
+                # rug: the reported "price" of a drained pool is not sellable -> virtual outcome = what a
+                # PAPER_TRADE_SIZE sell could pull out of the remaining liquidity
+                pnl = rug_pnl_pct(o["entry"], o.get("last_price") or o["entry"], self.s.paper_trade_size, liq)
+                o["max_down"] = min(o["max_down"], pnl)
+                self._close(o, o["entry"] * (1 + pnl / 100), "liquidity_gone", ev)
+                continue
+            if price and implausible_jump(o.get("last_price") or o["entry"], price, self.s.paper_max_price_jump):
+                self.stats["price_spikes_ignored"] += 1
+                continue
+            if price:
+                o["last_price"] = price
             if not price:
                 if o["mint"] not in self.src.tracked_mints() and now - o["ts"] > 120:
                     self._close(o, None, "lost", ev)

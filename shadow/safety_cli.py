@@ -78,6 +78,7 @@ def _db_bytes(path: str, wal: bool = True) -> int:
 async def run_safety_live(s: Settings, seconds: float = 300, quiet: bool = False) -> dict:
     path = str(s.path(s.db_path))
     db = Database(path)
+    db.acquire_writer_lock()
     limiters = make_limiters()
     sc = Scanner(s, db, limiters=limiters)
     col = Collector(s, db, limiters=limiters)

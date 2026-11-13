@@ -154,7 +154,7 @@ def rollback(db: Database, name: str, version: int) -> None:
     rows = {r["version"]: r for r in db.strategy_param_versions(name)}
     if version not in rows:
         raise ValueError(f"{name} has no version {version}")
-    with db.con:
+    with db.tx():
         db.con.execute("UPDATE strategy_params SET active=0 WHERE strategy=?", (name,))
         db.con.execute("UPDATE strategy_params SET active=1 WHERE strategy=? AND version=?", (name, version))
 

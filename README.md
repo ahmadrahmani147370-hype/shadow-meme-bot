@@ -7,7 +7,7 @@ Solana meme coin scanner + **paper-trading** signal bot in Python, built for **A
 > private key, ever. `PAPER_ONLY` is a constant in the code; `.env` cannot turn it off.
 > Signals are not financial advice, and the bot reports only results it actually measured.
 
-## Status: Phase 6 of 10 ✅ (paper trading + guarded self-learning)
+## Status: Phase 7 of 10 ✅ (crash-safe SQLite: backups, retention, CSV export)
 
 | Phase | What | Status |
 |---|---|---|
@@ -16,9 +16,9 @@ Solana meme coin scanner + **paper-trading** signal bot in Python, built for **A
 | 3 | Data collection (price, mcap, liquidity, volume, buys/sells) | ✅ done |
 | 4 | Coin safety checker (strict) | ✅ done |
 | 5 | Signal engine + strategies + judge agent + MCAP / TOP VOLUME universes | ✅ done |
-| 6 | Paper trading engine ($100, $2/trade, $0.50+$0.50 fees, max 5 open) + self-learning | ✅ done |
-| 7 | SQLite database (positions survive restarts) | ⏳ next |
-| 8 | Telegram commands, alerts, daily report | ⏳ |
+| 6 | Paper trading engine ($100, $2/trade, quote slippage, fees $0 by default, max 5 open) + self-learning | ✅ done |
+| 7 | SQLite database hardening (crash-safe, bounded size, daily backups, CSV export) | ✅ done |
+| 8 | Telegram commands, alerts, daily report | ⏳ next |
 | 9 | Dashboard (Telegram Mini App on GitHub Pages) + self-improving strategies | ⏳ |
 | 10 | Complete testing | ⏳ |
 
@@ -72,7 +72,8 @@ pkg install -y git python && git clone https://github.com/ahmadrahmani147370-hyp
    Collector test (phase 3): `python main.py --debug collect 300` — har coin ki price, market cap, liquidity, volume aur buys/sells, aur 1-minute candles. Aakhir mein batata hai kitne coins track hue, kitne kis wajah se chhore gaye, har API ko kitni calls gayin, aur CPU/RAM kitni lagi.
    Safety test (phase 4): `python main.py --debug safety <mint>` — ek coin ki poori safety report (mint/freeze authority, Token-2022, holders, insiders, dev, liquidity, fake volume, Jupiter par bechne ka test). `python main.py --debug safety-live 300` — 5 minute tak har naye coin ki report, aakhir mein kitne pass/reject hue aur kis wajah se.
    Signals test (phase 5): `python main.py --debug signals 600` — 10 minute tak sab kuch live: naye coins, $1M+ MCAP coins, TOP VOLUME coins, safety, signals aur judge. Har BUY WATCH ke neeche judge ka faisla (APPROVE / VETO) aur wajah. Aakhir mein har list ke signals, judge ki ginti, API calls aur CPU/RAM. `quiet` likhein to REJECT lines screen par nahi aatin (ginti phir bhi hoti hai).
-   Paper trading test (phase 6): `python main.py --debug paper 900` — 15 minute tak sab kuch, aur judge jis BUY WATCH ko APPROVE kare us par $2 ka paper trade (asli paisa nahi). Har trade khulne aur band hone par screen par aata hai, fees ke baad nafa/nuqsan ke saath. `python main.py --debug paper report` — balance, khuli positions, history, aaj ki report aur strategies (bina kuch chalaye, database se).
+   Paper trading test (phase 6): `python main.py --debug paper 900` — 15 minute tak sab kuch, aur judge jis BUY WATCH ko APPROVE kare us par $2 ka paper trade (asli paisa nahi). Har trade khulne aur band hone par screen par aata hai, slippage (aur agar .env mein fee ho to fee) ke baad nafa/nuqsan ke saath. `python main.py --debug paper report` — balance, khuli positions, history, aaj ki report aur strategies (bina kuch chalaye, database se).
+   Database (phase 7): `python main.py --debug db` — database theek hai ya nahi (integrity), paper account aur trades ka hisaab milta hai ya nahi, har table ka size, backups. `... db backup` abhi backup, `... db export` trades aur rozana report CSV (Excel) mein `data/exports/` mein.
 6. Phase 8 ke baad: `nano .env` mein Telegram token aur chat id likhein, phir `./start.sh`.
 
 Scanner do tarah se coins dhoondta hai: PumpPortal websocket (live) aur GeckoTerminal + RugCheck polling. Test mein websocket ne sirf ~19% naye pump.fun coins diye, is liye polling hamesha on rehti hai. Ek coin dobara nahi aata, restart ke baad bhi nahi.
@@ -108,19 +109,31 @@ kam liquidity, zyada price impact, purani Jupiter quote, dump ka khatra, ek jais
 watches, ya strategy ka nuqsan — in mein se kuch ho to VETO. Har faisla save hota hai; veto kiye
 gaye coins ka bhi baad mein nateeja dekha jaata hai, taa ke pata chale judge sahi tha ya nahi.
 
-**Paper trading + khud seekhna (phase 6) – Roman Urdu:** $100 virtual balance, har trade $2, $0.50
-khareedne aur $0.50 bechne ki fee (`.env` mein badal sakte hain), ek waqt mein zyada se zyada 5 trades.
+**Paper trading + khud seekhna (phase 6) – Roman Urdu:** $100 virtual balance, har trade $2, koi fee
+nahi (default $0.00 — chahein to `.env` mein `PAPER_BUY_FEE` / `PAPER_SELL_FEE` likh kar fee wapas
+laga sakte hain), ek waqt mein zyada se zyada 5 trades.
 Trade sirf tab khulta hai jab judge APPROVE kare aur Jupiter ki taaza quote ho; slippage usi quote se.
 Band hone ki wajah: stop loss, take profit, trailing stop, time stop, ya SELL signal. Sab kuch SQLite
 mein — phone restart ho jaye to bhi balance aur positions wapas. Rozana 50 trades sirf target hai,
-zabardasti koi trade nahi. **Dhyan dein:** $2 ke trade par $1 fees = 50% — is setting par trade ko
-munafa dene ke liye price ~50% se zyada barhna chahiye, is liye aksar nateeja manfi hoga. Asal Solana
-fees bohat kam hain; chahein to `PAPER_BUY_FEE` / `PAPER_SELL_FEE` kam kar dein.
+zabardasti koi trade nahi. Ahmed ke faisle par (13 Nov 2026) fees hata di gayi hain; sirf Jupiter quote
+wala slippage lagta hai (har taraf kam az kam 0.5%). Phase 6 ke live nateeje purani $0.50 + $0.50 fee
+ke saath the.
 Strategies khud behtar hoti hain, lekin hifazat ke saath: kam az kam 30 band watches, purane data par
 chuna gaya badlaav naye (na dekhe gaye) data par bhi behtar hona chahiye, ek qadam mein ek setting
 sirf 20% tak, 6 ghante mein ek badlaav, aur naya version kharab nikle to khud purane par wapas. Har
 badlaav, wapsi aur judge ki setting ka badlaav database mein "strategy update" ke taur par likha jaata
 hai (kya badla, kyun, pehle/baad ke nateeje, version) — phase 8 mein ye Telegram par aapko bheja jayega.
+
+**Database (phase 7) – Roman Urdu:** phone achanak band ho jaye, Termux mar jaye ya battery khatam
+ho — paper balance, khuli positions, strategy versions aur strategy updates sahi rehte hain. Test mein
+bot ko beech mein zabardasti (kill -9) band kiya gaya, dobara chalaya gaya, aur har baar hisaab poora
+mila. Ek waqt mein sirf ek bot database mein likh sakta hai (doosra shuru hi nahi hoga). Purana data
+khud saaf hota hai taa ke phone ki memory na bhare (hadd `DB_MAX_MB=150`). Har roz (Pakistan time)
+ek backup `data/backups/` mein banta hai, aakhri 7 rakhe jaate hain. Rozana 50 trades ki ginti raat
+12 baje PKT par zero hoti hai. Rug ki hifazat: agar coin ka pool khali ho jaye (liquidity $500 se kam), trade foran nuqsan ke saath
+band hota hai — khali pool ki jhooti qeemat par kabhi munafa nahi likha jata. Backup wapas lana ho: bot band karein, phir
+`gunzip -c data/backups/<file>.db.gz > data/shadow.db`. Backup mein sirf zaroori data hota hai (balance,
+trades, strategies, updates) — market data bot khud chand minute mein dobara jama kar leta hai.
 
 Yaad rakhein: ye bot **sirf paper trading** karta hai. Na wallet, na private key, na asli paisa.
 Phone par 24 ghante lagatar chalne ki guarantee nahi — Android, battery aur network kabhi bhi rok sakte hain.
@@ -175,9 +188,8 @@ python main.py --debug collect 300     # scanner + collector live for 5 minutes
 - **Extras:** GeckoTerminal 1-minute OHLCV for the `HOT_SIZE` (3) busiest tokens every 90 s;
   Jupiter price v3 fills liquidity (DexScreener has none for pump.fun bonding pairs) and is the
   price fallback when a pair is missing.
-- **Retention:** snapshots 3 h, candles 6 h, untracked market rows and drops 2 days, seen tokens
-  2 days, safety reports 3 h after a token stops being tracked, RugCheck cache 1 h (cleanup every
-  10 minutes). Estimated steady state at 200 tracked tokens: roughly 100 MB of SQLite.
+- **Retention:** see "Database hardening (phase 7)" below (phase 7 shortened candles to 4 h, untracked
+  market rows/drops to 12 h and seen tokens to 1 day).
 - **Bags** (`dexId` `bags`, Meteora DBC) is treated as a bonding launchpad like pump.fun.
 - **Interface for phases 4/5:** `collector.get_market(mint)`, `collector.get_candles(mint, minutes=60)`,
   `collector.candles_df(mint)`, `collector.tracked_mints()`, `collector.updates` (queue).
@@ -305,15 +317,17 @@ python main.py --debug learn           # one guarded learning pass on the record
 
 **Paper engine** (`shadow/paper.py`, virtual USD, `PAPER_ONLY` is a code constant): opens only for a
 judge-APPROVED BUY WATCH with score ≥ `MIN_TRADE_SCORE` and a fresh, sellable Jupiter quote. $100 start,
-$2 per trade, $0.50 buy + $0.50 sell fee, max 5 open, one position per coin, `PAPER_DAILY_TARGET` (50) is a
+$2 per trade, buy/sell fee $0.00 by default (`PAPER_BUY_FEE` / `PAPER_SELL_FEE`, configurable), max 5 open, one position per coin, `PAPER_DAILY_TARGET` (50) is a
 target only. Entry/exit slippage = the quote's price impact for the trade size (≥ 0.5%); at exit without a
 quote younger than 10 min the conservative `PAPER_SLIPPAGE_PCT` (3%) is used. Exits: SL, TP, trailing stop
 (per strategy and universe: `trail_pct` below the peak once up `trail_activate_pct`), time stop, SELL
 signal (dump / exhaustion), no price for 30 min. Account, positions and equity snapshots are SQLite tables,
 so a restart continues where it stopped; open BUY WATCHes are reloaded too.
 
-> With the default fees a round trip costs $1 on a $2 trade (50%): a trade only profits if the coin
-> rises ~50%+. That is the configured rule, not a bug; real Solana swap fees are far lower.
+> Fees default to $0 since phase 7 (Ahmed's decision, 13 Nov 2026). The only trading cost is the slippage
+> from the Jupiter quote (≥ 0.5% each way, so a round trip costs ≥ ~1%). Phase 6 ran with $0.50 + $0.50
+> (50% of a $2 trade); its live numbers below are from that setting. Set `PAPER_BUY_FEE` / `PAPER_SELL_FEE`
+> in `.env` to simulate fees again.
 
 **Self-learning** (`shadow/learning.py`): every BUY WATCH (approved or vetoed) records its price path
 for 2× the time stop, so any exit params can be replayed exactly, after fees and slippage. Guardrails:
@@ -335,7 +349,7 @@ now refreshes every 180 s instead of 90 s.
 **Reports for phase 8** (`shadow/reports.py`): `paper_text`, `positions_text`, `history_text`,
 `report_text`, `strategies_text` (+ `*_stats` data versions).
 
-**Phase 6 live test (13 Nov 2026, real data, honest numbers, 2 × 1000 s on the same DB):**
+**Phase 6 live test (13 Nov 2026, real data, honest numbers, 2 × 1000 s on the same DB, with the old $0.50 + $0.50 fees):**
 
 | | run 1 (10:16–10:33 PKT) | run 2 (10:34–10:51 PKT, after restart) |
 |---|---|---|
@@ -353,6 +367,76 @@ now refreshes every 180 s instead of 90 s.
 - Virtual watch outcomes: 3 of 5 approved watches went up (before fees). All 3 vetoed watches lost (veto precision 100%, n=3).
 - Self-learning and judge tuning made **no changes**: they need at least 30 closed samples (live had 0–8).
 - A fresh process after the restart shows the same account and the same 2 open positions (`--debug paper report`).
+
+## Database hardening (phase 7)
+
+- **WAL + busy_timeout + one writer.** One process, one connection; every write goes through
+  `Database.tx()` (`BEGIN IMMEDIATE`, reentrant). Multi-row changes are one transaction: a paper
+  open = position row + cash debit; a close = position update + cash credit (only if it really
+  closed); a learned version = new `strategy_params` row + `learning_log` + `strategy_updates`
+  notification; a rollback likewise. A lock file (`<db>.lock`, `flock`) stops a second bot on the
+  same database; the kernel drops it when the process dies, so a crash never leaves a stale lock.
+  Readers (phase 9 dashboard) use `Database.open_readonly()`.
+- **Crash safety.** `synchronous=NORMAL` in WAL mode: a kill can lose at most the last commits, never
+  half of one. `maintenance.consistency()` checks: paper cash / realized P&L / fees == what the trade
+  rows imply, one active version per strategy, every strategy_update points at stored versions, and
+  the newest update per target is the active version. Checked at start of every live run.
+- **Retention.** Snapshots 3 h, candles 4 h, RugCheck cache 1 h, de-dup + untracked market rows
+  1 day, REJECT signals 3 days (their feature JSON dropped after 24 h), BUY_WATCH/SELL signals and
+  judge verdicts 30 days, equity curve 30 days, learning log 90 days. Kept forever (tiny): paper
+  trades, strategy versions, strategy updates. Signals that a paper trade points to are never deleted.
+  `DB_MAX_MB` (150) is a hard cap: over it, retentions are halved (down to floors that live signals
+  need) and the file is VACUUMed.
+- **Maintenance loop** (every `MAINTENANCE_SEC`): prune, size cap, `PRAGMA optimize` every 6 h,
+  `VACUUM` at most daily and only with ≥10% free pages, WAL checkpoint (WAL capped at 16 MB),
+  and one verified gzip backup per PKT day (`data/backups`, newest 7 kept). `BACKUP_MODE=state`
+  (default) backs up only what can't be rebuilt (paper account + trades, strategy versions + updates,
+  learning log, judge verdicts, BUY_WATCH/SELL signals, blacklist): a few KB to MB instead of the whole
+  market cache. `BACKUP_MODE=full` or `--debug db backup full` copies everything. Restore: stop the bot,
+  `gunzip -c data/backups/<file>.db.gz > data/shadow.db`.
+- **Day rollover** in `TIMEZONE` (default Asia/Karachi, fixed UTC+5 fallback if the phone has no
+  tz database): the 50-trade counter, daily report and daily backup roll over at 00:00 PKT.
+- **Indexes** (schema v6) for /paper, /positions, /history, /report, /strategies, unsent
+  notifications, the signal feed and the equity curve (each query is checked with EXPLAIN in tests).
+- **Rug guard for exits** (`shadow/pricing.py`, found in the phase 7 live run): BTCCNDL's pool was
+  drained (liquidity $112k → $0.11 → $9.93) and DexScreener then reported a price of $95.27
+  (+150,000,000%). Before the fix the paper engine booked that as a +$87,637 take profit and the judge
+  counted a +150M% win. Now DexScreener liquidity under `PAPER_RUG_LIQUIDITY_USD` (500) closes the
+  position / watch as `liquidity_gone`, valued at the last trusted price sold into the remaining pool
+  (constant product), and a one-update jump over `PAPER_MAX_PRICE_JUMP` (50×) is ignored. Jupiter's
+  liquidity estimate for bonding-curve coins (~$100) does not trigger it.
+- **CSV export** (`shadow/export.py`): trades, daily report (per PKT day), equity, signals, judge
+  verdicts, strategy updates. Each `*_csv()` returns text for phase 8 to send as a document.
+
+```
+python main.py --debug db                 # integrity_check, consistency, sizes, row counts, backups
+python main.py --debug db prune|vacuum|optimize   # bot must be stopped (it does these itself)
+python main.py --debug db backup          # works while the bot runs
+python main.py --debug db verify [file]   # integrity of a backup
+python main.py --debug db projection [h]  # steady-state size from the last h hours
+python main.py --debug db export [dir]    # CSV files (default data/exports)
+```
+
+**Phase 7 live numbers (13 Nov 2026, real data, honest):**
+
+- **Final run** (660 s, fresh DB, final code, fees $0): 1 paper trade (MSCLD) opened, then closed by the
+  new rug guard as `liquidity_gone`, −$1.94 (−97.1%). 4 BUY_WATCH (1 approve / 3 veto), 0 × 429,
+  5 timeouts (RugCheck / Jupiter / DexScreener), CPU 0.8%, RSS 57 MB.
+- **Growth:** used size 0.25 → 3.82 MB in 11 min, about +19 MB/hour while the tables fill up
+  (other runs: +18.3 and +21.6 MB/h). Rolling tables stop growing at their retention. Projected size
+  from the measured insert rates: about 82 MB after 1 day, 90 MB after 3, 100 MB after 7, 145 MB after
+  30 days (all rolling tables full). Two earlier runs projected 123 and 133 MB at 30 days. The
+  `DB_MAX_MB=150` hard cap holds it there; WAL ≤ 16 MB; daily state backups ≈ 8 KB gz each.
+- **Crash test (live):** a live `--debug paper` run was killed with `kill -9` while holding 4 open paper
+  positions and 4.1 MB of un-checkpointed WAL. After restart: integrity_check ok, cash $90.00 ==
+  implied by the trades, all 4 positions back. A second bot on the same DB was refused (`WriterLocked`),
+  and `--debug db prune` was refused while the bot was running.
+- **Crash test (automated):** `tests/test_persistence.py` kills a writer doing the bot's multi-row writes
+  8 times at random moments. A separate stress run of 40 more kills found 0 inconsistencies (paper
+  books, one active version per strategy, every strategy_update matches its version and change-log row).
+- **Bug found and fixed in this phase:** a drained pool (BTCCNDL, liquidity $112k → $9.93, reported price
+  $95.27 = +150,000,000%) was booked as a +$87,637 paper take profit. That test DB was discarded; the
+  rug guard above prevents it.
 
 ## Doctor (self-check)
 
@@ -409,13 +493,18 @@ shadow/signals_cli.py   `--debug signals` live printer
 shadow/paper.py         phase 6: paper trading engine (fees, quote slippage, SL/TP/trailing/time stop)
 shadow/learning.py      phase 6: guarded self-learning (strategies + judge), judge accuracy
 shadow/reports.py       phase 6: /paper /positions /history /report /strategies texts, update notifications
-shadow/db.py            SQLite schema v5 (paper_account, paper_positions, paper_equity, learning_log,
+shadow/maintenance.py   phase 7: integrity/consistency, retention + size cap, VACUUM/optimize, backups, projection
+shadow/export.py        phase 7: CSV export (trades, daily report, equity, signals, judge, strategy updates)
+shadow/db_cli.py        `--debug db`
+shadow/timeutil.py      phase 7: PKT day boundaries
+shadow/db.py            SQLite schema v6 (indexes + meta; single-writer tx() + lock file) on v5 (paper_account, paper_positions, paper_equity, learning_log,
                         strategy_updates, signals.path_json) on top of v4: seen_tokens, token_market, price_snapshots, candles_1m, drops,
                         safety_reports, rugcheck_cache, creator_blacklist, universe_members, universe_runs,
                         signals, judge_verdicts, strategy_params (+ `universe` column: new / mcap / volume)
 shadow/telegram_bot.py  phase 8 stub
 shadow/dashboard.py     phase 9 stub
-tests/                  pytest (config, doctor, scanner, collector, safety, universes, signals, strategies, judge;
+tests/                  pytest (config, doctor, scanner, collector, safety, universes, signals, strategies, judge,
+                        paper, learning, persistence incl. a real kill -9 test via tests/crash_worker.py;
                         recorded responses + real candles in tests/fixtures/)
 tools/                  record_candles_fixture.py (rebuilds the real-candle fixture)
 docs/DATA_SOURCES.md    tested data sources

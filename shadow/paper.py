@@ -21,6 +21,8 @@ from collections import Counter, deque
 from . import PAPER_ONLY
 from .config import Settings
 from .db import Database
+from .pricing import amm_out, capped_value, drained, implausible_jump
+from .timeutil import day_start as _tz_day_start
 
 PHASE = 6
 IMPLEMENTED = True
@@ -29,9 +31,9 @@ DS_TOKENS = "https://api.dexscreener.com/tokens/v1/solana/"
 
 
 def day_start(ts: float) -> float:
-    """Local midnight (the box / phone time zone, e.g. PKT)."""
-    lt = time.localtime(ts)
-    return time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
+    """Midnight in the configured TIMEZONE (PKT by default), independent of the phone's own TZ: the 50-trade
+    daily counter rolls over at 00:00 PKT."""
+    return _tz_day_start(ts)
 
 
 class PaperEngine:
@@ -53,14 +55,14 @@ class PaperEngine:
         r = self.db.con.execute("SELECT * FROM paper_account WHERE id=1").fetchone()
         if r is None:
             now = self.clock()
-            with self.db.con:
+            with self.db.tx():
                 self.db.con.execute("INSERT INTO paper_account (id, start_balance, cash, created_ts, updated_ts) "
                                     "VALUES (1,?,?,?,?)", (self.s.paper_start_balance, self.s.paper_start_balance, now, now))
             r = self.db.con.execute("SELECT * FROM paper_account WHERE id=1").fetchone()
         return dict(r)
 
     def _cash_add(self, delta: float, fee: float = 0.0, pnl: float | None = None) -> None:
-        with self.db.con:
+        with self.db.tx():
             self.db.con.execute("UPDATE paper_account SET cash=cash+?, fees_paid=fees_paid+?, "
                                 "realized_pnl=realized_pnl+?, updated_ts=? WHERE id=1",
                                 (delta, fee, pnl or 0.0, self.clock()))
@@ -116,7 +118,7 @@ class PaperEngine:
         entry = market * (1 + slip / 100)
         qty = s.paper_trade_size / entry
         cur = None
-        with self.db.con:
+        with self.db.tx():
             cur = self.db.con.execute(
                 "INSERT INTO paper_positions (signal_id, mint, symbol, universe, strategy, params_version, status, open_ts,"
                 " market_price, entry_price, size_usd, qty, buy_fee, entry_slippage_pct, sl, tp, trail_pct,"
@@ -126,7 +128,8 @@ class PaperEngine:
                  row.get("params_version"), now, market, entry, s.paper_trade_size, qty, s.paper_buy_fee, slip,
                  row.get("sl"), row.get("tp"), params.get("trail_pct"), params.get("trail_activate_pct"), market,
                  row.get("time_stop_min"), row.get("judge_confidence"), row.get("score"), market, now))
-        self._cash_add(-(s.paper_trade_size + s.paper_buy_fee), fee=s.paper_buy_fee, pnl=-s.paper_buy_fee)
+            # same transaction as the position row: a kill -9 can never leave a position without its cash debit
+            self._cash_add(-(s.paper_trade_size + s.paper_buy_fee), fee=s.paper_buy_fee, pnl=-s.paper_buy_fee)
         pid = cur.lastrowid
         self.stats["opened"] += 1
         pos = self.get(pid)
@@ -146,22 +149,29 @@ class PaperEngine:
             return max(float(q.get("impact_pct") or 0.0), self.s.paper_min_slippage_pct)
         return self.s.paper_slippage_pct
 
-    def close(self, pos: dict, market_price: float | None, reason: str) -> dict:
+    def close(self, pos: dict, market_price: float | None, reason: str, liquidity_usd: float | None = None) -> dict:
         s, now = self.s, self.clock()
         market_price = market_price or pos["last_price"] or pos["market_price"]
         slip = self._exit_slippage(pos["mint"], now)
         exit_price = market_price * (1 - slip / 100)
-        proceeds = pos["qty"] * exit_price
+        if reason == "liquidity_gone":  # drained pool: only its remaining quote side can be pulled out
+            proceeds = amm_out(pos["qty"] * exit_price, liquidity_usd)
+        else:
+            proceeds = capped_value(pos["qty"] * exit_price, liquidity_usd)  # can't sell more than the pool holds
+        if pos["qty"]:
+            exit_price = proceeds / pos["qty"]
         # P&L includes both fees; the buy fee was already booked at open, so only proceeds - size - sell fee here
         pnl = proceeds - pos["size_usd"] - pos["buy_fee"] - s.paper_sell_fee
-        with self.db.con:
-            self.db.con.execute(
+        with self.db.tx():
+            cur = self.db.con.execute(
                 "UPDATE paper_positions SET status='closed', exit_ts=?, exit_market_price=?, exit_price=?, sell_fee=?,"
                 " exit_slippage_pct=?, exit_reason=?, proceeds=?, pnl_usd=?, pnl_pct=? WHERE id=? AND status='open'",
                 (now, market_price, exit_price, s.paper_sell_fee, slip, reason, proceeds, pnl,
                  pnl / pos["size_usd"] * 100, pos["id"]))
-        self._cash_add(proceeds - s.paper_sell_fee, fee=s.paper_sell_fee,
-                       pnl=proceeds - pos["size_usd"] - s.paper_sell_fee)
+            # credit cash only if this call really closed it (no double credit), in the same transaction
+            if cur.rowcount == 1:
+                self._cash_add(proceeds - s.paper_sell_fee, fee=s.paper_sell_fee,
+                               pnl=proceeds - pos["size_usd"] - s.paper_sell_fee)
         self.stats["closed"] += 1
         self.stats[f"exit_{reason}"] += 1
         out = self.get(pos["id"])
@@ -173,7 +183,11 @@ class PaperEngine:
         for p in self.open_positions():
             if p["signal_id"] == signal_id:
                 md = self.src.get_market(p["mint"]) if self.src else None
-                return self.close(p, md.price_usd if md and md.price_usd else None, f"sell_signal_{reason}")
+                price = md.price_usd if md and md.price_usd else None
+                if implausible_jump(p["last_price"] or p["market_price"], price, self.s.paper_max_price_jump):
+                    price = None  # bad tick: last trusted price instead
+                liq = md.liquidity_usd if md and md.liquidity_source in (None, "", "dexscreener") else None
+                return self.close(p, price, f"sell_signal_{reason}", liquidity_usd=liq)
         return None
 
     def exit_reason(self, p: dict, price: float, now: float) -> str | None:
@@ -190,7 +204,7 @@ class PaperEngine:
         return None
 
     # ---------------------------------------------------------------- loop step
-    async def _fetch_prices(self, mints: list[str]) -> dict[str, float]:
+    async def _fetch_prices(self, mints: list[str]) -> dict[str, tuple]:
         """Positions whose coin is no longer tracked: one DexScreener batch call (max every 30 s)."""
         if not mints or self._client is None or self.limiters is None or self.clock() - self._last_fetch < 30:
             return {}
@@ -210,25 +224,36 @@ class PaperEngine:
             if good:
                 md = market_from_pairs(m, good, self.clock())
                 if md.price_usd:
-                    out[m] = md.price_usd
+                    out[m] = (md.price_usd, md.liquidity_usd, md.liquidity_source or "dexscreener")
         self.stats["price_fetches"] += 1
         return out
 
     async def manage(self) -> int:
         now = self.clock()
         opens = self.open_positions()
-        prices: dict[str, float] = {}
+        prices: dict[str, tuple] = {}
         missing = []
         for p in opens:
             md = self.src.get_market(p["mint"]) if self.src else None
             if md and md.price_usd and (not md.updated_ts or now - md.updated_ts < 300):
-                prices[p["mint"]] = md.price_usd
+                prices[p["mint"]] = (md.price_usd, md.liquidity_usd, md.liquidity_source)
             else:
                 missing.append(p["mint"])
         prices.update(await self._fetch_prices(missing))
         closed = 0
         for p in opens:
-            price = prices.get(p["mint"])
+            price, liq, liq_src = prices.get(p["mint"]) or (None, None, None)
+            if liq_src not in (None, "", "dexscreener"):
+                liq = None  # estimated liquidity: no rug rule, no cap
+            if price and drained(liq, self.s.paper_rug_liquidity_usd):
+                self.stats["rug_exits"] += 1
+                # value at the last trusted price (the drained pool's own "price" is dust math), capped by liquidity
+                self.close(p, p["last_price"] or p["market_price"], "liquidity_gone", liquidity_usd=liq)
+                closed += 1
+                continue
+            if price and implausible_jump(p["last_price"] or p["market_price"], price, self.s.paper_max_price_jump):
+                self.stats["price_spikes_ignored"] += 1
+                price = None
             if not price:
                 if now - (p["last_price_ts"] or p["open_ts"]) > self.s.paper_no_price_close_min * 60:
                     self.close(p, None, "no_price")
@@ -236,19 +261,19 @@ class PaperEngine:
                 continue
             peak = max(p["peak_price"] or price, price)
             chg = (price / p["market_price"] - 1) * 100
-            with self.db.con:
+            with self.db.tx():
                 self.db.con.execute("UPDATE paper_positions SET last_price=?, last_price_ts=?, peak_price=?, "
                                     "max_up_pct=MAX(COALESCE(max_up_pct,0),?), max_down_pct=MIN(COALESCE(max_down_pct,0),?)"
                                     " WHERE id=?", (price, now, peak, chg, chg, p["id"]))
             p.update(last_price=price, peak_price=peak)
             reason = self.exit_reason(p, price, now)
             if reason:
-                self.close(p, price, reason)
+                self.close(p, price, reason, liquidity_usd=liq)
                 closed += 1
         if now - self._last_equity >= self.s.paper_equity_every_sec:
             self._last_equity = now
             e = self.equity()
-            with self.db.con:
+            with self.db.tx():
                 self.db.con.execute("INSERT OR REPLACE INTO paper_equity (ts, cash, open_value, equity, n_open, realized_pnl)"
                                     " VALUES (?,?,?,?,?,?)", (now, e["cash"], e["open_value"], e["equity"], e["n_open"],
                                                              e["realized_pnl"]))

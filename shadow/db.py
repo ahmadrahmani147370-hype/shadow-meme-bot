@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from dataclasses import asdict, fields
@@ -18,7 +19,7 @@ from dataclasses import asdict, fields
 from .models import AMM, BONDING, MIGRATED, Candle, MarketData, TokenEvent
 
 PHASE = 7
-IMPLEMENTED = False  # partial: migrations, seen_tokens, market data, snapshots, candles, safety reports
+IMPLEMENTED = True  # WAL + busy_timeout + single writer, crash-safe transactions, retention, indexes
 
 MIGRATIONS: list[str] = [
     # v1 (phase 2): de-dup table for the scanner
@@ -179,6 +180,24 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX IF NOT EXISTS idx_updates_sent ON strategy_updates(sent_ts, ts);
     """,
+    # v6 (phase 7): indexes for phase 8 commands / phase 9 dashboard + a small key/value meta table
+    """
+    CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT, ts REAL);
+    -- /paper, trades_today (50/day counter), daily report: positions opened since PKT midnight
+    CREATE INDEX IF NOT EXISTS idx_paper_open_ts ON paper_positions(open_ts);
+    -- /history, CSV export, dashboard trade list: closed trades newest first
+    CREATE INDEX IF NOT EXISTS idx_paper_closed ON paper_positions(status, exit_ts);
+    CREATE INDEX IF NOT EXISTS idx_paper_mint ON paper_positions(mint, status);
+    -- dashboard signal feed + /report signals per universe and type
+    CREATE INDEX IF NOT EXISTS idx_signals_ts ON signals(ts);
+    CREATE INDEX IF NOT EXISTS idx_signals_universe ON signals(universe, alert_type, ts);
+    CREATE INDEX IF NOT EXISTS idx_signals_type ON signals(alert_type, ts);
+    -- judge accuracy (approved vs vetoed outcomes)
+    CREATE INDEX IF NOT EXISTS idx_judge_outcome ON judge_verdicts(verdict, outcome_ts);
+    -- /strategies history per strategy
+    CREATE INDEX IF NOT EXISTS idx_updates_target ON strategy_updates(target, ts);
+    CREATE INDEX IF NOT EXISTS idx_params_active ON strategy_params(strategy, active);
+    """,
 ]
 
 MARKET_COLS = ("mint", "symbol", "name", "pair_address", "dex_id", "quote_symbol", "price_usd", "price_native",
@@ -199,17 +218,108 @@ def _market_sets() -> str:
     return ", ".join(parts)
 
 
+class WriterLocked(RuntimeError):
+    """Another SHADOW MEME process already writes to this database."""
+
+
 class Database:
-    def __init__(self, path: str | Path):
+    """One connection, one writer.
+
+    Single-writer discipline: the bot is one asyncio process with one connection; all writes go through
+    `tx()` (BEGIN IMMEDIATE, reentrant), so a multi-row change (paper open = position + cash, a strategy
+    version + its change log + its strategy_update notification) is all-or-nothing even under kill -9.
+    Long-running writers also take an OS lock file (`acquire_writer_lock`) so a second bot process on the same
+    DB refuses to start instead of fighting over it. Readers (phase 9 dashboard) use `Database.readonly()`.
+    The connection is in autocommit mode (isolation_level=None): a statement outside `tx()` commits by itself.
+    """
+
+    def __init__(self, path: str | Path, busy_timeout_ms: int = 10000, readonly: bool = False):
         self.path = str(path)
+        self.readonly = readonly
+        self._depth = 0
+        self._lock_fd = None
+        if readonly:
+            uri = f"file:{Path(self.path).resolve()}?mode=ro"
+            self.con = sqlite3.connect(uri, uri=True, timeout=busy_timeout_ms / 1000, isolation_level=None)
+            self.con.row_factory = sqlite3.Row
+            self.con.execute(f"PRAGMA busy_timeout={int(busy_timeout_ms)}")
+            self.con.execute("PRAGMA query_only=1")
+            return
         if self.path != ":memory:":
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        self.con = sqlite3.connect(self.path, timeout=10)
+        self.con = sqlite3.connect(self.path, timeout=busy_timeout_ms / 1000, isolation_level=None)
         self.con.row_factory = sqlite3.Row
+        self.con.execute(f"PRAGMA busy_timeout={int(busy_timeout_ms)}")
         if self.path != ":memory:":
             self.con.execute("PRAGMA journal_mode=WAL")
+            self.con.execute("PRAGMA journal_size_limit=16777216")  # WAL file truncated back to <= 16 MB
+        # NORMAL in WAL mode: a crash/kill can lose at most the last commits, never corrupt the database
         self.con.execute("PRAGMA synchronous=NORMAL")
         self.migrate()
+
+    @classmethod
+    def open_readonly(cls, path: str | Path, busy_timeout_ms: int = 10000) -> "Database":
+        return cls(path, busy_timeout_ms=busy_timeout_ms, readonly=True)
+
+    @contextmanager
+    def tx(self):
+        """Reentrant write transaction (BEGIN IMMEDIATE takes the write lock up front -> no mid-transaction
+        SQLITE_BUSY upgrade deadlocks). Nested tx() calls join the outer one."""
+        if self._depth:
+            self._depth += 1
+            try:
+                yield self.con
+            finally:
+                self._depth -= 1
+            return
+        self.con.execute("BEGIN IMMEDIATE")
+        self._depth = 1
+        try:
+            yield self.con
+        except BaseException:
+            self._depth = 0
+            if self.con.in_transaction:
+                self.con.execute("ROLLBACK")
+            raise
+        else:
+            self._depth = 0
+            self.con.execute("COMMIT")
+
+    def acquire_writer_lock(self) -> None:
+        """OS-level exclusive lock next to the DB file; released automatically when the process dies
+        (also on kill -9), so a crash never leaves a stale lock behind."""
+        if self.path == ":memory:" or self._lock_fd is not None:
+            return
+        import fcntl
+        import os
+        fd = os.open(self.path + ".lock", os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            raise WriterLocked(f"another SHADOW MEME process is already writing {self.path} "
+                               "(stop it first: only one bot per database)")
+        os.ftruncate(fd, 0)
+        os.write(fd, str(os.getpid()).encode())
+        self._lock_fd = fd
+
+    def release_writer_lock(self) -> None:
+        if self._lock_fd is not None:
+            import fcntl
+            import os
+            fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+            os.close(self._lock_fd)
+            self._lock_fd = None
+
+    # -- meta key/value (maintenance bookkeeping)
+    def meta_get(self, key: str, default=None):
+        r = self.con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return r[0] if r else default
+
+    def meta_set(self, key: str, value) -> None:
+        with self.tx():
+            self.con.execute("INSERT OR REPLACE INTO meta (key, value, ts) VALUES (?,?,?)",
+                             (key, None if value is None else str(value), time.time()))
 
     @property
     def version(self) -> int:
@@ -229,6 +339,7 @@ class Database:
 
     def close(self) -> None:
         self.con.close()
+        self.release_writer_lock()
 
     # ---------------------------------------------------------------- seen tokens
     def is_seen(self, mint: str) -> bool:
@@ -240,7 +351,7 @@ class Database:
 
     def mark_new(self, ev: TokenEvent) -> bool:
         """Insert a token the first time it is seen. Returns False if it was already known."""
-        with self.con:
+        with self.tx():
             cur = self.con.execute(
                 """INSERT OR IGNORE INTO seen_tokens (mint, name, symbol, source, first_seen_ts, launch_ts, creator,
                    dev_buy_sol, dev_buy_tokens, initial_mcap_sol, status, launchpad, pool, pool_address, migrated_ts, raw_json)
@@ -253,7 +364,7 @@ class Database:
 
     def fill_missing(self, ev: TokenEvent) -> None:
         """A later source may know the name/symbol/creator the first source lacked."""
-        with self.con:
+        with self.tx():
             self.con.execute(
                 """UPDATE seen_tokens SET name=COALESCE(NULLIF(name,''), ?), symbol=COALESCE(NULLIF(symbol,''), ?),
                    creator=COALESCE(NULLIF(creator,''), ?) WHERE mint=?""",
@@ -267,7 +378,7 @@ class Database:
             return True
         if row["status"] == MIGRATED:
             return False
-        with self.con:
+        with self.tx():
             self.con.execute(
                 "UPDATE seen_tokens SET status=?, pool=?, pool_address=COALESCE(NULLIF(?,''), pool_address), migrated_ts=? WHERE mint=?",
                 (MIGRATED, ev.pool, ev.pool_address, ev.seen_ts, ev.mint))
@@ -289,7 +400,7 @@ class Database:
 
     def prune(self, older_than_days: float = 14) -> int:
         """Keep the de-dup table small on a phone (later phases keep their own history)."""
-        with self.con:
+        with self.tx():
             return self.con.execute("DELETE FROM seen_tokens WHERE first_seen_ts < ?",
                                     (time.time() - older_than_days * 86400,)).rowcount
 
@@ -300,7 +411,7 @@ class Database:
         vals = [d[c] for c in MARKET_COLS]
         sets = _market_sets()
         track_sql = "" if tracking is None else f", tracking={1 if tracking else 0}"
-        with self.con:
+        with self.tx():
             self.con.execute(
                 f"INSERT INTO token_market ({', '.join(MARKET_COLS)}, first_enriched_ts, tracking) "
                 f"VALUES ({', '.join('?' * len(MARKET_COLS))}, ?, ?) ON CONFLICT(mint) DO UPDATE SET {sets}{track_sql}",
@@ -317,7 +428,7 @@ class Database:
         for m in ms:
             d = asdict(m)
             rows.append([d[c] for c in MARKET_COLS] + [m.updated_ts, 1 if tracking else 0])
-        with self.con:
+        with self.tx():
             self.con.executemany(
                 f"INSERT INTO token_market ({', '.join(MARKET_COLS)}, first_enriched_ts, tracking) "
                 f"VALUES ({', '.join('?' * len(MARKET_COLS))}, ?, ?) ON CONFLICT(mint) DO UPDATE SET {sets}{track_sql}",
@@ -332,7 +443,7 @@ class Database:
 
 
     def set_tracking(self, mint: str, tracking: bool, reason: str = "") -> None:
-        with self.con:
+        with self.tx():
             self.con.execute("UPDATE token_market SET tracking=?, stop_reason=?, stopped_ts=? WHERE mint=?",
                              (1 if tracking else 0, reason or None, None if tracking else time.time(), mint))
 
@@ -344,14 +455,14 @@ class Database:
     def add_snapshots(self, rows: list[tuple]) -> None:
         """rows: (mint, ts, price_usd, market_cap, liquidity_usd, vol_m5, vol_h24, buys_h24, sells_h24, source)"""
         if rows:
-            with self.con:
+            with self.tx():
                 self.con.executemany("INSERT INTO price_snapshots (mint, ts, price_usd, market_cap, liquidity_usd, vol_m5,"
                                      " vol_h24, buys_h24, sells_h24, source) VALUES (?,?,?,?,?,?,?,?,?,?)", rows)
 
 
     def upsert_candles(self, candles: list[Candle]) -> None:
         if candles:
-            with self.con:
+            with self.tx():
                 self.con.executemany(
                     "INSERT OR REPLACE INTO candles_1m (mint, ts, open, high, low, close, volume_usd, buys, sells,"
                     " n_snapshots, source) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -362,7 +473,7 @@ class Database:
     def insert_candles_ignore(self, candles: list[Candle]) -> None:
         """Backfill: never replaces a candle that already exists."""
         if candles:
-            with self.con:
+            with self.tx():
                 self.con.executemany(
                     "INSERT OR IGNORE INTO candles_1m (mint, ts, open, high, low, close, volume_usd, buys, sells,"
                     " n_snapshots, source) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -376,16 +487,19 @@ class Database:
 
 
     def add_drop(self, mint: str, reason: str, detail: str = "", universe: str = "new") -> None:
-        with self.con:
+        with self.tx():
             self.con.execute("INSERT OR REPLACE INTO collector_drops (mint, reason, ts, detail, universe) "
                              "VALUES (?,?,?,?,?)", (mint, reason, time.time(), detail[:300], universe))
 
 
     def cleanup(self, snapshot_retention_h: float, candle_retention_h: float, market_retention_d: float = 7,
-                 seen_retention_d: float = 14, now: float | None = None) -> dict:
+                 seen_retention_d: float = 14, now: float | None = None, signal_retention_d: float = 30,
+                 signal_reject_retention_d: float = 3, signal_detail_retention_h: float = 24,
+                 paper_equity_retention_d: float = 30, creator_blacklist_retention_d: float = 30,
+                 seen_raw_retention_h: float = 6) -> dict:
         now = now or time.time()
         out = {}
-        with self.con:
+        with self.tx():
             out["snapshots"] = self.con.execute("DELETE FROM price_snapshots WHERE ts < ?",
                                                 (now - snapshot_retention_h * 3600,)).rowcount
             out["candles"] = self.con.execute("DELETE FROM candles_1m WHERE ts < ?",
@@ -398,16 +512,24 @@ class Database:
                 "DELETE FROM safety_reports WHERE checked_ts < ? AND mint NOT IN "
                 "(SELECT mint FROM token_market WHERE tracking=1)", (now - snapshot_retention_h * 3600,)).rowcount
             out["rc_cache"] = self.con.execute("DELETE FROM rugcheck_cache WHERE ts < ?", (now - 3600,)).rowcount
-            out["signals"] = self.con.execute("DELETE FROM signals WHERE ts < ? AND COALESCE(status, '') != 'open'",
-                                              (now - 30 * 86400,)).rowcount
-            self.con.execute("DELETE FROM judge_verdicts WHERE ts < ?", (now - 30 * 86400,))
+            # never delete an open watch or a signal an (open or closed) paper trade points to
+            keep = "COALESCE(status, '') != 'open' AND id NOT IN (SELECT signal_id FROM paper_positions WHERE signal_id IS NOT NULL)"
+            out["signals"] = self.con.execute(f"DELETE FROM signals WHERE ts < ? AND {keep}",
+                                              (now - signal_retention_d * 86400,)).rowcount
+            # REJECTs are ~95% of all signals: short retention, and their bulky JSON goes first
+            out["signals_reject"] = self.con.execute(f"DELETE FROM signals WHERE alert_type='REJECT' AND ts < ? AND {keep}",
+                                                     (now - signal_reject_retention_d * 86400,)).rowcount
+            self.con.execute("UPDATE signals SET features_json=NULL, detectors_json=NULL WHERE alert_type='REJECT' "
+                             "AND ts < ? AND features_json IS NOT NULL", (now - signal_detail_retention_h * 3600,))
+            self.con.execute("DELETE FROM judge_verdicts WHERE ts < ?", (now - signal_retention_d * 86400,))
             self.con.execute("DELETE FROM universe_runs WHERE ts < ?", (now - 7 * 86400,))
-            self.con.execute("DELETE FROM paper_equity WHERE ts < ?", (now - 30 * 86400,))
+            out["equity"] = self.con.execute("DELETE FROM paper_equity WHERE ts < ?",
+                                             (now - paper_equity_retention_d * 86400,)).rowcount
             self.con.execute("DELETE FROM learning_log WHERE ts < ?", (now - 90 * 86400,))
             out["blacklist"] = self.con.execute("DELETE FROM creator_blacklist WHERE ts < ?",
-                                                (now - 30 * 86400,)).rowcount
+                                                (now - creator_blacklist_retention_d * 86400,)).rowcount
             self.con.execute("UPDATE seen_tokens SET raw_json=NULL WHERE raw_json IS NOT NULL AND first_seen_ts < ?",
-                             (now - 6 * 3600,))
+                             (now - seen_raw_retention_h * 3600,))
             out["seen"] = self.con.execute("DELETE FROM seen_tokens WHERE first_seen_ts < ?",
                                            (now - seen_retention_d * 86400,)).rowcount
         return out
@@ -418,13 +540,13 @@ class Database:
                 for t in ("seen_tokens", "token_market", "price_snapshots", "candles_1m", "collector_drops",
                           "safety_reports", "rugcheck_cache", "creator_blacklist", "universe_members", "signals",
                           "judge_verdicts", "strategy_params", "universe_runs", "paper_positions", "paper_equity",
-                          "learning_log", "strategy_updates")}
+                          "learning_log", "strategy_updates", "paper_account", "meta")}
 
     # ---------------------------------------------------------------- phase 4 tables
     def save_safety(self, row: dict) -> None:
         cols = ("mint", "checked_ts", "expires_ts", "score", "verdict", "critical_json", "flags_json", "data_json",
                 "rpc_ts", "rc_ts", "quote_ts", "partial", "universe")
-        with self.con:
+        with self.tx():
             self.con.execute(f"INSERT OR REPLACE INTO safety_reports ({', '.join(cols)}) VALUES "
                              f"({', '.join('?' * len(cols))})", [row.get(c) for c in cols])
 
@@ -433,7 +555,7 @@ class Database:
         return dict(r) if r else None
 
     def put_rugcheck(self, mint: str, report: dict, ts: float | None = None) -> None:
-        with self.con:
+        with self.tx():
             self.con.execute("INSERT OR REPLACE INTO rugcheck_cache (mint, ts, report_json) VALUES (?,?,?)",
                              (mint, ts or time.time(), json.dumps(report)))
 
@@ -451,7 +573,7 @@ class Database:
 
     def blacklist_creator(self, creator: str, reason: str, n_tokens: int | None = None) -> None:
         if creator:
-            with self.con:
+            with self.tx():
                 self.con.execute("INSERT OR REPLACE INTO creator_blacklist (creator, reason, n_tokens, ts) "
                                  "VALUES (?,?,?,?)", (creator, reason[:200], n_tokens, time.time()))
 
@@ -466,7 +588,7 @@ class Database:
                                mcap: float | None = None, vol_h24: float | None = None, vol_h1: float | None = None,
                                liquidity_usd: float | None = None) -> None:
         now = now or time.time()
-        with self.con:
+        with self.tx():
             self.con.execute(
                 "INSERT INTO universe_members (mint, universe, first_ts, last_ts, rank, metric, source, active, rank_h1,"
                 " mcap, vol_h24, vol_h1, liquidity_usd) VALUES (?,?,?,?,?,?,?,1,?,?,?,?,?) "
@@ -478,7 +600,7 @@ class Database:
     def deactivate_universe_members(self, universe: str, keep: set) -> int:
         rows = [r[0] for r in self.con.execute("SELECT mint FROM universe_members WHERE universe=? AND active=1",
                                                (universe,)) if r[0] not in keep]
-        with self.con:
+        with self.tx():
             self.con.executemany("UPDATE universe_members SET active=0 WHERE mint=? AND universe=?",
                                  [(m, universe) for m in rows])
         return len(rows)
@@ -492,7 +614,7 @@ class Database:
         return [r[0] for r in self.con.execute(q, (mint,))]
 
     def add_universe_run(self, row: dict) -> None:
-        with self.con:
+        with self.tx():
             self.con.execute("INSERT INTO universe_runs (ts, candidates, mcap_members, volume_members, filtered_json, calls)"
                              " VALUES (?,?,?,?,?,?)", (row["ts"], row.get("candidates"), row.get("mcap_members"),
                                                        row.get("volume_members"), json.dumps(row.get("filtered") or {}),
@@ -505,14 +627,14 @@ class Database:
                    "reason", "status")
 
     def add_signal(self, row: dict) -> int:
-        with self.con:
+        with self.tx():
             cur = self.con.execute(f"INSERT INTO signals ({', '.join(self.SIGNAL_COLS)}) VALUES "
                                    f"({', '.join('?' * len(self.SIGNAL_COLS))})", [row.get(c) for c in self.SIGNAL_COLS])
         return cur.lastrowid
 
     def update_signal(self, sid: int, **kw) -> None:
         if kw:
-            with self.con:
+            with self.tx():
                 self.con.execute(f"UPDATE signals SET {', '.join(f'{k}=?' for k in kw)} WHERE id=?", [*kw.values(), sid])
 
     def get_signal(self, sid: int) -> dict | None:
@@ -531,13 +653,13 @@ class Database:
     def add_judge_verdict(self, row: dict) -> int:
         cols = ("signal_id", "ts", "mint", "universe", "strategy", "verdict", "confidence", "reasons_json",
                 "inputs_json", "judge_version")
-        with self.con:
+        with self.tx():
             cur = self.con.execute(f"INSERT INTO judge_verdicts ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
                                    [row.get(c) for c in cols])
         return cur.lastrowid
 
     def set_judge_outcome(self, signal_id: int, outcome: str, pnl_pct: float | None, ts: float) -> None:
-        with self.con:
+        with self.tx():
             self.con.execute("UPDATE judge_verdicts SET outcome=?, outcome_pnl_pct=?, outcome_ts=? WHERE signal_id=?",
                              (outcome, pnl_pct, ts, signal_id))
 
@@ -548,7 +670,7 @@ class Database:
 
     def save_strategy_params(self, strategy: str, version: int, params: dict, universes: list, source: str,
                              parent_version: int | None = None, note: str = "", active: bool = True) -> None:
-        with self.con:
+        with self.tx():
             if active:
                 self.con.execute("UPDATE strategy_params SET active=0 WHERE strategy=?", (strategy,))
             self.con.execute("INSERT OR REPLACE INTO strategy_params (strategy, version, created_ts, active, source, "
@@ -577,7 +699,7 @@ class Database:
     def add_learning_log(self, target: str, action: str, reason: str, metrics: dict | None = None,
                          changes: dict | None = None, from_version: int | None = None, to_version: int | None = None,
                          ts: float | None = None) -> int:
-        with self.con:
+        with self.tx():
             cur = self.con.execute(
                 "INSERT INTO learning_log (ts, target, action, from_version, to_version, reason, metrics_json, changes_json)"
                 " VALUES (?,?,?,?,?,?,?,?)", (ts or time.time(), target, action, from_version, to_version, reason,
@@ -595,7 +717,7 @@ class Database:
 
     def add_strategy_update(self, kind: str, target: str, from_version: int | None, to_version: int | None,
                             changes: dict, reason: str, metrics: dict, ts: float | None = None) -> int:
-        with self.con:
+        with self.tx():
             cur = self.con.execute(
                 "INSERT INTO strategy_updates (ts, kind, target, from_version, to_version, changes_json, reason, metrics_json)"
                 " VALUES (?,?,?,?,?,?,?,?)", (ts or time.time(), kind, target, from_version, to_version,
@@ -615,7 +737,7 @@ class Database:
         return rows
 
     def mark_strategy_updates_sent(self, ids: list[int], ts: float | None = None) -> None:
-        with self.con:
+        with self.tx():
             self.con.executemany("UPDATE strategy_updates SET sent_ts=? WHERE id=?", [(ts or time.time(), i) for i in ids])
 
     def strategy_param_versions(self, strategy: str) -> list[dict]:

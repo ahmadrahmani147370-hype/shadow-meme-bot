@@ -110,9 +110,9 @@ class Settings:
     hot_refresh_sec: int = 180     # 1 GT call/min: the other GT minute goes to universe backfill
     jup_refresh_sec: int = 60      # Jupiter price/liquidity fill-in for tracked tokens
     snapshot_retention_h: int = 3      # signals look back <= MAX_TOKEN_AGE_MIN (2 h)
-    candle_retention_h: int = 6        # tokens are tracked <= 2 h; older candles are never read
-    market_retention_d: float = 2      # untracked token_market rows + drops
-    seen_retention_d: float = 2        # de-dup table (creator history for serial-creator checks needs 24 h)
+    candle_retention_h: int = 4        # tokens are tracked <= 2 h, backfill reads 60 min (phase 7: 6 -> 4 h)
+    market_retention_d: float = 0.5    # untracked token_market rows + drops (phase 7: 2 -> 0.5 d; tracking stops at 2 h)
+    seen_retention_d: float = 1        # de-dup table; serial-creator check needs 24 h (phase 7: 2 -> 1 d)
 
     # Safety (phase 4), STRICT defaults. Thresholds are % of total supply unless noted.
     safety_min_score: int = 70           # below this sub-score = reject
@@ -179,8 +179,8 @@ class Settings:
     # Paper trading (phase 6). Money values are virtual USD.
     paper_start_balance: float = 100.0
     paper_trade_size: float = 2.0
-    paper_buy_fee: float = 0.50
-    paper_sell_fee: float = 0.50
+    paper_buy_fee: float = 0.0     # Ahmed 13 Nov 2026: no fees by default (slippage from the quote stays)
+    paper_sell_fee: float = 0.0
     paper_slippage_pct: float = 3.0
     paper_max_open: int = 5
     paper_daily_target: int = 50   # a target, never a quota: weak signals are never forced
@@ -188,6 +188,8 @@ class Settings:
     paper_min_slippage_pct: float = 0.5   # entry/exit slippage = Jupiter quote price impact, at least this
     paper_exit_quote_max_age_sec: int = 600  # older quote at exit -> PAPER_SLIPPAGE_PCT is used instead
     paper_no_price_close_min: int = 30    # no price for this long -> close at the last known price
+    paper_rug_liquidity_usd: float = 500.0  # pool liquidity below this = drained (rug): exit value capped by it
+    paper_max_price_jump: float = 50.0    # one-update price jump above this x = bad data, ignored
     paper_equity_every_sec: int = 60
 
     # Self-learning (phase 6): guarded tuning of strategy params and judge thresholds
@@ -204,6 +206,24 @@ class Settings:
     judge_tuning_enabled: bool = True
     universe_backfill_sec: int = 60       # one GeckoTerminal OHLCV backfill per minute for universe members
     universe_backfill_minutes: int = 60
+
+    # Persistence hardening (phase 7)
+    timezone: str = "Asia/Karachi"        # day boundaries (50-trade counter, daily report, backups) = PKT midnight
+    db_busy_timeout_ms: int = 10000
+    db_max_mb: float = 150.0              # hard cap: above this after a normal prune -> emergency prune
+    maintenance_sec: int = 300            # prune / checkpoint / optimize / backup check
+    optimize_every_h: float = 6.0         # PRAGMA optimize
+    vacuum_every_h: float = 24.0          # VACUUM at most this often ...
+    vacuum_min_free_pct: float = 10.0     # ... and only when this % of the file is free pages
+    backup_dir: str = "data/backups"
+    backup_keep: int = 7                  # daily gzip backups kept (rotation)
+    signal_retention_d: float = 30        # BUY_WATCH / SELL / HOLD signals (learning + /history)
+    signal_reject_retention_d: float = 2  # REJECT signals
+    creator_blacklist_retention_d: float = 14  # local cache; RugCheck's creator history still flags them later
+    seen_raw_retention_h: float = 1       # raw scanner JSON of seen_tokens (debug only, never read)
+    backup_mode: str = "state"            # state = durable tables only (small) | full = whole database
+    signal_detail_retention_h: float = 24 # REJECT feature/detector JSON is dropped after this
+    paper_equity_retention_d: float = 30
 
     paper_only: bool = field(default=PAPER_ONLY, init=False)
     warnings: tuple = ()
@@ -265,9 +285,9 @@ def load_settings(env_file: str | Path | None = None, env: dict | None = None) -
         hot_refresh_sec=_num(env, "HOT_REFRESH_SEC", 180, int, w, 30, 3600),
         jup_refresh_sec=_num(env, "JUP_REFRESH_SEC", 60, int, w, 10, 3600),
         snapshot_retention_h=_num(env, "SNAPSHOT_RETENTION_H", 3, int, w, 1, 720),
-        candle_retention_h=_num(env, "CANDLE_RETENTION_H", 6, int, w, 1, 2160),
-        market_retention_d=_num(env, "MARKET_RETENTION_D", 2.0, float, w, 0.1, 90),
-        seen_retention_d=_num(env, "SEEN_RETENTION_D", 2.0, float, w, 1, 90),
+        candle_retention_h=_num(env, "CANDLE_RETENTION_H", 4, int, w, 1, 2160),
+        market_retention_d=_num(env, "MARKET_RETENTION_D", 0.5, float, w, 0.1, 90),
+        seen_retention_d=_num(env, "SEEN_RETENTION_D", 1.0, float, w, 1, 90),
         safety_min_score=_num(env, "SAFETY_MIN_SCORE", 70, int, w, 0, 100),
         safety_ttl_sec=_num(env, "SAFETY_TTL_SEC", 900, int, w, 60, 86400),
         safety_reject_ttl_sec=_num(env, "SAFETY_REJECT_TTL_SEC", 1800, int, w, 60, 86400),
@@ -324,8 +344,8 @@ def load_settings(env_file: str | Path | None = None, env: dict | None = None) -
         judge_max_strategy_dd_pct=_num(env, "JUDGE_MAX_STRATEGY_DD_PCT", 20.0, float, w, 1, 100),
         paper_start_balance=_num(env, "PAPER_START_BALANCE", 100.0, float, w, 1, 1e9),
         paper_trade_size=_num(env, "PAPER_TRADE_SIZE", 2.0, float, w, 0.01, 1e6),
-        paper_buy_fee=_num(env, "PAPER_BUY_FEE", 0.50, float, w, 0, 1e6),
-        paper_sell_fee=_num(env, "PAPER_SELL_FEE", 0.50, float, w, 0, 1e6),
+        paper_buy_fee=_num(env, "PAPER_BUY_FEE", 0.0, float, w, 0, 1e6),
+        paper_sell_fee=_num(env, "PAPER_SELL_FEE", 0.0, float, w, 0, 1e6),
         paper_slippage_pct=_num(env, "PAPER_SLIPPAGE_PCT", 3.0, float, w, 0, 50),
         paper_max_open=_num(env, "PAPER_MAX_OPEN", 5, int, w, 1, 50),
         paper_daily_target=_num(env, "PAPER_DAILY_TARGET", 50, int, w, 0, 10000),
@@ -333,6 +353,8 @@ def load_settings(env_file: str | Path | None = None, env: dict | None = None) -
         paper_min_slippage_pct=_num(env, "PAPER_MIN_SLIPPAGE_PCT", 0.5, float, w, 0, 50),
         paper_exit_quote_max_age_sec=_num(env, "PAPER_EXIT_QUOTE_MAX_AGE_SEC", 600, int, w, 10, 86400),
         paper_no_price_close_min=_num(env, "PAPER_NO_PRICE_CLOSE_MIN", 30, int, w, 1, 10080),
+        paper_rug_liquidity_usd=_num(env, "PAPER_RUG_LIQUIDITY_USD", 500.0, float, w, 0, 1e9),
+        paper_max_price_jump=_num(env, "PAPER_MAX_PRICE_JUMP", 50.0, float, w, 2, 1e9),
         paper_equity_every_sec=_num(env, "PAPER_EQUITY_EVERY_SEC", 60, int, w, 10, 86400),
         learn_enabled=_str(env, "LEARN_ENABLED", "true").lower() in ("1", "true", "yes", "on"),
         learn_every_min=_num(env, "LEARN_EVERY_MIN", 30, int, w, 1, 10080),
@@ -347,10 +369,30 @@ def load_settings(env_file: str | Path | None = None, env: dict | None = None) -
         judge_tuning_enabled=_str(env, "JUDGE_TUNING_ENABLED", "true").lower() in ("1", "true", "yes", "on"),
         universe_backfill_sec=_num(env, "UNIVERSE_BACKFILL_SEC", 60, int, w, 15, 86400),
         universe_backfill_minutes=_num(env, "UNIVERSE_BACKFILL_MINUTES", 60, int, w, 10, 300),
+        timezone=_str(env, "TIMEZONE", Settings.timezone) or Settings.timezone,
+        db_busy_timeout_ms=_num(env, "DB_BUSY_TIMEOUT_MS", 10000, int, w, 100, 600000),
+        db_max_mb=_num(env, "DB_MAX_MB", 150.0, float, w, 10, 100000),
+        maintenance_sec=_num(env, "MAINTENANCE_SEC", 300, int, w, 10, 86400),
+        optimize_every_h=_num(env, "OPTIMIZE_EVERY_H", 6.0, float, w, 0.1, 720),
+        vacuum_every_h=_num(env, "VACUUM_EVERY_H", 24.0, float, w, 0.5, 720),
+        vacuum_min_free_pct=_num(env, "VACUUM_MIN_FREE_PCT", 10.0, float, w, 0, 100),
+        backup_dir=_str(env, "BACKUP_DIR", Settings.backup_dir) or Settings.backup_dir,
+        backup_keep=_num(env, "BACKUP_KEEP", 7, int, w, 1, 365),
+        signal_retention_d=_num(env, "SIGNAL_RETENTION_D", 30.0, float, w, 1, 3650),
+        signal_reject_retention_d=_num(env, "SIGNAL_REJECT_RETENTION_D", 2.0, float, w, 0.1, 365),
+        creator_blacklist_retention_d=_num(env, "CREATOR_BLACKLIST_RETENTION_D", 14.0, float, w, 1, 3650),
+        seen_raw_retention_h=_num(env, "SEEN_RAW_RETENTION_H", 1.0, float, w, 0, 720),
+        backup_mode=(_str(env, "BACKUP_MODE", "state").lower() if _str(env, "BACKUP_MODE", "state").lower() in ("state", "full") else "state"),
+        signal_detail_retention_h=_num(env, "SIGNAL_DETAIL_RETENTION_H", 24.0, float, w, 1, 8760),
+        paper_equity_retention_d=_num(env, "PAPER_EQUITY_RETENTION_D", 30.0, float, w, 1, 3650),
         warnings=tuple(w),
     )
     if s.log_level not in ("DEBUG", "INFO", "WARNING", "ERROR"):
         s = _replace(s, log_level="INFO", warnings=s.warnings + (f"LOG_LEVEL={s.log_level} unknown, using INFO",))
+    from .timeutil import set_timezone
+    tz_warn = set_timezone(s.timezone)
+    if tz_warn:
+        s = _replace(s, warnings=s.warnings + (tz_warn,))
     for msg in s.warnings:
         log.warning(msg)
     return s

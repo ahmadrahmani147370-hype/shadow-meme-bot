@@ -42,6 +42,7 @@ def _cpu_mem():
 
 async def run_collect(s: Settings, seconds: float = 300, quiet: bool = False) -> dict:
     db = Database(s.path(s.db_path))
+    db.acquire_writer_lock()
     limiters = make_limiters()
     sc = Scanner(s, db, limiters=limiters)
     stops = []

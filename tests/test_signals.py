@@ -284,3 +284,20 @@ def test_backfill_flow_features_ignore_backfilled_candles():
     f1 = compute_features(cs, md, "new", cs[-1].ts + 60)
     f2 = compute_features(back + cs, md, "new", cs[-1].ts + 60)
     assert f1["buy_ratio_5m"] == f2["buy_ratio_5m"] and f1["buyer_growth"] == f2["buyer_growth"]
+
+
+def test_drained_pool_closes_watch_as_rug_loss_not_take_profit(tmp_path):
+    """Phase 7 fix (live 13 Nov 2026, BTCCNDL): a drained pool's dust price must not count as a +150M% win
+    for judge accuracy or learning."""
+    setup = early_setup()
+    cs, md = setup
+    now = cs[-1].ts + 60
+    db, eng, chk, out, clock = make_engine(tmp_path, cs, md, report(md.mint, now))
+    asyncio.run(eng.step())
+    sid = db.con.execute("SELECT id FROM signals WHERE alert_type='BUY_WATCH'").fetchone()[0]
+    md.price_usd, md.liquidity_usd, md.liquidity_source = cs[-1].close * 1.5e6, 9.93, "dexscreener"
+    clock["t"] += 60
+    asyncio.run(eng.step())
+    row = db.get_signal(sid)
+    assert row["status"] == "closed" and row["exit_reason"] == "liquidity_gone" and row["pnl_pct"] < 0
+    assert db.con.execute("SELECT outcome FROM judge_verdicts WHERE signal_id=?", (sid,)).fetchone()[0] == "loss"

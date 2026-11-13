@@ -36,7 +36,9 @@ def test_simulate_exits():
     assert simulate("early_entry", EE, {**smp, "path": path(1, 2, every=60 * 25)}, 0)["reason"] == "time_stop"
     assert simulate("early_entry", EE, {**smp, "path": path(1, 2)}, 0) is None          # horizon too short
     assert simulate("early_entry", {**EE, "min_score": 75}, smp, 0)["taken"] is False
-    assert cost_pct(S) == pytest.approx(51.0)       # $1 fees on $2 = 50% + 2 x 0.5% slippage
+    assert cost_pct(S) == pytest.approx(1.0)        # default: no fees, 2 x 0.5% minimum slippage
+    from dataclasses import replace
+    assert cost_pct(replace(S, paper_buy_fee=0.5, paper_sell_fee=0.5)) == pytest.approx(51.0)  # $1 on $2 = 50% + 1%
 
 
 def test_candidates_are_bounded():
