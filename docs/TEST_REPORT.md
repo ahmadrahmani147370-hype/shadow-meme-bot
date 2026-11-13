@@ -13,7 +13,7 @@ is estimated unless it says so. **Paper trading only** - no wallet, no private k
 | `BUILD_EXTENSION=no pip install -r requirements-dev.txt` in a new venv | ok - only pure-Python wheels: httpx 0.28.1, httpcore, h11, anyio, certifi, idna, websockets 17.4, python-dotenv 1.2.4, pytest 9.2 |
 | `python -m shadow.doctor` | **27 OK, 3 WARN, 2 FAIL** - the 2 FAILs were pandas and numpy missing → **bug 1** (fixed) |
 | `pytest` (incl. the live network test) | 289 passed, 1 skipped (the pandas-only test) |
-| After the fixes: fresh clone of the release, same minimal venv | see §7 |
+| After the fixes: fresh clone of the release, same minimal venv | doctor **26 OK, 6 WARN, 0 FAIL → READY**; pytest **305 passed, 1 skipped** |
 
 ## 2. Long end-to-end run (35 minutes)
 
@@ -112,6 +112,11 @@ startup message delivered.
   suspended when idle (processes pause and resume; no alerts while paused).
 - Telegram may be blocked on some Pakistani networks (`TELEGRAM_API_BASE` / WARP).
 
-## 7. Final verification (release commit)
+## 7. Final verification (release commit 6033e38, tag v1.0.0)
 
-Filled in after tagging - see the release notes in the report to Ahmed.
+- Fresh clone, new venv with only `requirements-dev.txt` (no pandas/numpy, like Termux), no token:
+  doctor `26 OK, 6 WARN, 0 FAIL -> READY` (WARNs: pandas + numpy optional, Telegram token empty in the test
+  copy, GITHUB_TOKEN optional, pump.fun frontend behind Cloudflare, Birdeye needs a key - both unused);
+  `pytest`: **305 passed, 1 skipped** (the pandas-only helper test), including the live network test and
+  5 headless-Chrome dashboard tests.
+- Development machine with pandas installed: **306 passed**.
