@@ -193,6 +193,10 @@ def _classify(e: Endpoint, code: int | None, body: str, err: str = "") -> tuple[
         return WARN, "429 rate limited (reachable, slow down)"
     if code is None or code >= 400:
         snippet = "Cloudflare challenge" if "Just a moment" in body else body[:80].replace("\n", " ")
+        if e.name == "rugcheck_summary" and code == 400 and "unable to generate report" in body:
+            # RugCheck answered with its own JSON error: the API is up, it just has no report for the probe
+            # mint right now (seen for BONK/JUP/WIF on 13 Nov 2026 while new pump.fun mints worked).
+            return WARN, "HTTP 400: API reachable, no cached report for the probe mint"
         if e.key_needed == "yes" and code in (401, 403):
             return WARN, f"HTTP {code}: needs API key (not used by default)"
         return bad, f"HTTP {code}: {snippet}"

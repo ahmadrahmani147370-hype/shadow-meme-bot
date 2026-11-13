@@ -7,7 +7,7 @@ Solana meme coin scanner + **paper-trading** signal bot in Python, built for **A
 > private key, ever. `PAPER_ONLY` is a constant in the code; `.env` cannot turn it off.
 > Signals are not financial advice, and the bot reports only results it actually measured.
 
-## Status: Phase 5 of 10 ✅ (signals, strategies, judge, MCAP / TOP VOLUME universes)
+## Status: Phase 6 of 10 ✅ (paper trading + guarded self-learning)
 
 | Phase | What | Status |
 |---|---|---|
@@ -16,8 +16,8 @@ Solana meme coin scanner + **paper-trading** signal bot in Python, built for **A
 | 3 | Data collection (price, mcap, liquidity, volume, buys/sells) | ✅ done |
 | 4 | Coin safety checker (strict) | ✅ done |
 | 5 | Signal engine + strategies + judge agent + MCAP / TOP VOLUME universes | ✅ done |
-| 6 | Paper trading engine ($100, $2/trade, $0.50+$0.50 fees, max 5 open) + self-learning | ⏳ next |
-| 7 | SQLite database (positions survive restarts) | ⏳ |
+| 6 | Paper trading engine ($100, $2/trade, $0.50+$0.50 fees, max 5 open) + self-learning | ✅ done |
+| 7 | SQLite database (positions survive restarts) | ⏳ next |
 | 8 | Telegram commands, alerts, daily report | ⏳ |
 | 9 | Dashboard (Telegram Mini App on GitHub Pages) + self-improving strategies | ⏳ |
 | 10 | Complete testing | ⏳ |
@@ -42,7 +42,8 @@ python -m shadow.doctor
 4. Android: **Settings → Apps → Termux → Battery → Unrestricted**, otherwise Android kills it in the background.
 5. Try the scanner (phase 2): `python main.py --debug scan 120`, the collector (phase 3): `python main.py --debug collect 300`,
    the safety checker (phase 4): `python main.py --debug safety <mint>` or `python main.py --debug safety-live 300`,
-   and everything with signals + judge (phase 5): `python main.py --debug signals 600`
+   everything with signals + judge (phase 5): `python main.py --debug signals 600`,
+   and paper trading + self-learning (phase 6): `python main.py --debug paper 900` / `python main.py --debug paper report`
 6. From phase 8: `nano .env` (Telegram token + chat id), then `./start.sh`.
 
 **Telegram bot:** SHADOW MEME will use the existing **@Fathersigna147lBot** with owner chat id
@@ -71,6 +72,7 @@ pkg install -y git python && git clone https://github.com/ahmadrahmani147370-hyp
    Collector test (phase 3): `python main.py --debug collect 300` — har coin ki price, market cap, liquidity, volume aur buys/sells, aur 1-minute candles. Aakhir mein batata hai kitne coins track hue, kitne kis wajah se chhore gaye, har API ko kitni calls gayin, aur CPU/RAM kitni lagi.
    Safety test (phase 4): `python main.py --debug safety <mint>` — ek coin ki poori safety report (mint/freeze authority, Token-2022, holders, insiders, dev, liquidity, fake volume, Jupiter par bechne ka test). `python main.py --debug safety-live 300` — 5 minute tak har naye coin ki report, aakhir mein kitne pass/reject hue aur kis wajah se.
    Signals test (phase 5): `python main.py --debug signals 600` — 10 minute tak sab kuch live: naye coins, $1M+ MCAP coins, TOP VOLUME coins, safety, signals aur judge. Har BUY WATCH ke neeche judge ka faisla (APPROVE / VETO) aur wajah. Aakhir mein har list ke signals, judge ki ginti, API calls aur CPU/RAM. `quiet` likhein to REJECT lines screen par nahi aatin (ginti phir bhi hoti hai).
+   Paper trading test (phase 6): `python main.py --debug paper 900` — 15 minute tak sab kuch, aur judge jis BUY WATCH ko APPROVE kare us par $2 ka paper trade (asli paisa nahi). Har trade khulne aur band hone par screen par aata hai, fees ke baad nafa/nuqsan ke saath. `python main.py --debug paper report` — balance, khuli positions, history, aaj ki report aur strategies (bina kuch chalaye, database se).
 6. Phase 8 ke baad: `nano .env` mein Telegram token aur chat id likhein, phir `./start.sh`.
 
 Scanner do tarah se coins dhoondta hai: PumpPortal websocket (live) aur GeckoTerminal + RugCheck polling. Test mein websocket ne sirf ~19% naye pump.fun coins diye, is liye polling hamesha on rehti hai. Ek coin dobara nahi aata, restart ke baad bhi nahi.
@@ -105,6 +107,20 @@ sake). Har BUY WATCH ko ek alag **judge** dekhta hai (muft, bina AI ke, sirf qai
 kam liquidity, zyada price impact, purani Jupiter quote, dump ka khatra, ek jaise coins mein zyada
 watches, ya strategy ka nuqsan — in mein se kuch ho to VETO. Har faisla save hota hai; veto kiye
 gaye coins ka bhi baad mein nateeja dekha jaata hai, taa ke pata chale judge sahi tha ya nahi.
+
+**Paper trading + khud seekhna (phase 6) – Roman Urdu:** $100 virtual balance, har trade $2, $0.50
+khareedne aur $0.50 bechne ki fee (`.env` mein badal sakte hain), ek waqt mein zyada se zyada 5 trades.
+Trade sirf tab khulta hai jab judge APPROVE kare aur Jupiter ki taaza quote ho; slippage usi quote se.
+Band hone ki wajah: stop loss, take profit, trailing stop, time stop, ya SELL signal. Sab kuch SQLite
+mein — phone restart ho jaye to bhi balance aur positions wapas. Rozana 50 trades sirf target hai,
+zabardasti koi trade nahi. **Dhyan dein:** $2 ke trade par $1 fees = 50% — is setting par trade ko
+munafa dene ke liye price ~50% se zyada barhna chahiye, is liye aksar nateeja manfi hoga. Asal Solana
+fees bohat kam hain; chahein to `PAPER_BUY_FEE` / `PAPER_SELL_FEE` kam kar dein.
+Strategies khud behtar hoti hain, lekin hifazat ke saath: kam az kam 30 band watches, purane data par
+chuna gaya badlaav naye (na dekhe gaye) data par bhi behtar hona chahiye, ek qadam mein ek setting
+sirf 20% tak, 6 ghante mein ek badlaav, aur naya version kharab nikle to khud purane par wapas. Har
+badlaav, wapsi aur judge ki setting ka badlaav database mein "strategy update" ke taur par likha jaata
+hai (kya badla, kyun, pehle/baad ke nateeje, version) — phase 8 mein ye Telegram par aapko bheja jayega.
 
 Yaad rakhein: ye bot **sirf paper trading** karta hai. Na wallet, na private key, na asli paisa.
 Phone par 24 ghante lagatar chalne ki guarantee nahi — Android, battery aur network kabhi bhi rok sakte hain.
@@ -279,6 +295,65 @@ are no outcomes to report. API calls/min: DexScreener 30.6, RugCheck 29.3, Gecko
 Jupiter 4.5, RPC 4.0; **zero 429s**; 1 error (a RugCheck read timeout). CPU 1.0% average, RSS 54 MB,
 SQLite 3.9 MB after 11 minutes.
 
+## Paper trading and self-learning (phase 6)
+
+```bash
+python main.py --debug paper 900       # everything live for 15 min + paper trades + learning, with full stats
+python main.py --debug paper report    # /paper /positions /history /report /strategies texts from SQLite
+python main.py --debug learn           # one guarded learning pass on the recorded data
+```
+
+**Paper engine** (`shadow/paper.py`, virtual USD, `PAPER_ONLY` is a code constant): opens only for a
+judge-APPROVED BUY WATCH with score ≥ `MIN_TRADE_SCORE` and a fresh, sellable Jupiter quote. $100 start,
+$2 per trade, $0.50 buy + $0.50 sell fee, max 5 open, one position per coin, `PAPER_DAILY_TARGET` (50) is a
+target only. Entry/exit slippage = the quote's price impact for the trade size (≥ 0.5%); at exit without a
+quote younger than 10 min the conservative `PAPER_SLIPPAGE_PCT` (3%) is used. Exits: SL, TP, trailing stop
+(per strategy and universe: `trail_pct` below the peak once up `trail_activate_pct`), time stop, SELL
+signal (dump / exhaustion), no price for 30 min. Account, positions and equity snapshots are SQLite tables,
+so a restart continues where it stopped; open BUY WATCHes are reloaded too.
+
+> With the default fees a round trip costs $1 on a $2 trade (50%): a trade only profits if the coin
+> rises ~50%+. That is the configured rule, not a bug; real Solana swap fees are far lower.
+
+**Self-learning** (`shadow/learning.py`): every BUY WATCH (approved or vetoed) records its price path
+for 2× the time stop, so any exit params can be replayed exactly, after fees and slippage. Guardrails:
+≥ 30 samples per strategy+universe, walk-forward (oldest 70% choose, newest 30% must confirm, both by
+≥ 0.5 points of net % per opportunity), one param per step and ≤ 20% change inside hard limits, one change
+per 6 h, automatic rollback when a learned version does worse than its parent on the same live samples.
+The judge thresholds (confidence, impact, round-trip loss, liquidity floors) are tuned the same way from
+approved vs vetoed outcomes; `judge_stats()` reports approved/vetoed win rates, veto precision and
+accuracy per veto reason. Every decision is in `learning_log`; **every applied change, rollback and judge
+change creates a `strategy_updates` record** (old → new values, reason, before/after metrics with
+sample sizes, versions). `reports.pending_strategy_updates()` / `mark_strategy_updates_sent()` are what
+phase 8 sends to Telegram; `strategies_text()` shows the history for `/strategies`.
+
+**Universe backfill:** one GeckoTerminal OHLCV call per minute gives new MCAP / TOP VOLUME members the
+last 60 minutes of 1m candles (never overwriting live candles; flow detectors ignore backfilled minutes,
+which carry no buy/sell counts). To stay inside GeckoTerminal's tiny keyless limit, the new-launch hot set
+now refreshes every 180 s instead of 90 s.
+
+**Reports for phase 8** (`shadow/reports.py`): `paper_text`, `positions_text`, `history_text`,
+`report_text`, `strategies_text` (+ `*_stats` data versions).
+
+**Phase 6 live test (13 Nov 2026, real data, honest numbers, 2 × 1000 s on the same DB):**
+
+| | run 1 (10:16–10:33 PKT) | run 2 (10:34–10:51 PKT, after restart) |
+|---|---|---|
+| BUY_WATCH (new / mcap / volume) | 0 / 0 / 0 | 10 / 0 / 0 |
+| Judge APPROVE / VETO | 0 / 0 | 7 / 3 (spread, low_confidence, correlated) |
+| Paper trades opened / closed | 0 / 0 | 7 / 5 (3 take_profit, 2 stop_loss, 2 still open) |
+| Paper P&L after fees | $0 | closed −$5.75 (gross −$0.75, fees $5.00); equity $93.23 (−6.8%) |
+| Backfill (GeckoTerminal) | 14 coins / 742 candles | 8 coins / 386 candles |
+| 429s / errors | 0 / 0 | 0 / 1 (one Jupiter ReadTimeout) |
+| CPU avg / RSS | 0.9% / 55 MB | 1.1% / 57 MB peak |
+
+- 0 wins out of 5 closed: the three take-profits moved the price +25% to +40%, but $1 of fees on a $2 trade
+  (50% round trip) turns them into losses. With these fee settings a trade needs about +51% to break even.
+- JENSEN rugged within 2 minutes (price −100%, quote impact 100%), a full −$3.00 loss.
+- Virtual watch outcomes: 3 of 5 approved watches went up (before fees). All 3 vetoed watches lost (veto precision 100%, n=3).
+- Self-learning and judge tuning made **no changes**: they need at least 30 closed samples (live had 0–8).
+- A fresh process after the restart shows the same account and the same 2 open positions (`--debug paper report`).
+
 ## Doctor (self-check)
 
 ```bash
@@ -331,8 +406,11 @@ shadow/signals.py       phase 5: features, 10 detectors, score, SignalEngine (BU
 shadow/strategies.py    phase 5: 3 strategies, versioned params (strategy_params)
 shadow/judge.py         phase 5: rule-based judge agent (APPROVE / VETO + reasons)
 shadow/signals_cli.py   `--debug signals` live printer
-shadow/paper.py         phase 6 stub
-shadow/db.py            SQLite schema v4: seen_tokens, token_market, price_snapshots, candles_1m, drops,
+shadow/paper.py         phase 6: paper trading engine (fees, quote slippage, SL/TP/trailing/time stop)
+shadow/learning.py      phase 6: guarded self-learning (strategies + judge), judge accuracy
+shadow/reports.py       phase 6: /paper /positions /history /report /strategies texts, update notifications
+shadow/db.py            SQLite schema v5 (paper_account, paper_positions, paper_equity, learning_log,
+                        strategy_updates, signals.path_json) on top of v4: seen_tokens, token_market, price_snapshots, candles_1m, drops,
                         safety_reports, rugcheck_cache, creator_blacklist, universe_members, universe_runs,
                         signals, judge_verdicts, strategy_params (+ `universe` column: new / mcap / volume)
 shadow/telegram_bot.py  phase 8 stub

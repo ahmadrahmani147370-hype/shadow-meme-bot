@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 # Well-known mints used only as probe targets.
 BONK = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"
 WSOL = "So11111111111111111111111111111111111111112"
-JUP = "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"  # RugCheck probe: BONK answers 400 "unable to generate report" since 13 Nov 2026
+JUP = "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"  # BONK/JUP answer RugCheck 400 "unable to generate report" on 13 Nov 2026; probe uses WSOL
 
 
 @dataclass(frozen=True)
@@ -58,7 +58,7 @@ ENDPOINTS: tuple[Endpoint, ...] = (
              rpc_params=(BONK, {"encoding": "jsonParsed"}), expect="mintAuthority", required=False,
              limit="free; getTokenLargestAccounts blocked"),
     Endpoint("rugcheck_summary", "risk list, score, LP locked %",
-             f"https://api.rugcheck.xyz/v1/tokens/{JUP}/report/summary", expect="score",
+             f"https://api.rugcheck.xyz/v1/tokens/{WSOL}/report/summary", expect="score",
              key_needed="optional", limit="free: ~1-3 req/s, cached reports only"),
     Endpoint("jupiter_price", "USD price fallback (up to 50 mints per call)",
              f"https://api.jup.ag/price/v3?ids={BONK}", expect="usdPrice", key_needed="optional",

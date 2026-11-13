@@ -103,3 +103,42 @@ def test_volume_needs_real_volume_and_mcap_params_win(tmp_path):
     uc.members = {"mcap": {"A"}, "volume": {"A", "B"}}
     assert uc._universe_of("A") == "mcap" and uc._universe_of("B") == "volume"
     db.close()
+
+
+def test_gt_backfill_never_overwrites_live_candles(tmp_path):
+    import asyncio
+
+    import httpx
+
+    from shadow.models import Candle
+    from shadow.net import RateLimiter
+    from shadow.universes import UniverseCollector
+    # real GeckoTerminal 1m OHLCV rows recorded into candles_recorded.json, served in GT's payload shape
+    rec = json.loads((Path(__file__).parent / "fixtures" / "candles_recorded.json").read_text())
+    ser = next(v for k, v in rec["series"].items() if k.startswith("gt:"))
+    rows = [r[:6] for r in ser["candles"][-60:]]
+    ohlcv = {"data": {"attributes": {"ohlcv_list": rows}}}
+    start = rows[-10][0]                                  # tracking started 10 minutes before the newest row
+    calls = []
+
+    def h(req):
+        calls.append(req.url.path)
+        return httpx.Response(200, json=ohlcv)
+    db = Database(str(tmp_path / "b.db"))
+    lims = {"geckoterminal": RateLimiter("g", 6000)}
+    uc = UniverseCollector(S, db, client=httpx.AsyncClient(transport=httpx.MockTransport(h)), limiters=lims,
+                           clock=lambda: start + 30)
+    md = MarketData("P" * 44, symbol="P", price_usd=1.0, pair_address="POOL1", market_cap=5e6, liquidity_usd=1e5,
+                    vol_h1=1e4)
+    uc.members = {"mcap": {md.mint}, "volume": set()}
+    uc._start(md, start + 5)
+    live = Candle(md.mint, int(start), 9, 9, 9, 9, 1, 3, 1, 2, "local")
+    db.upsert_candles([live])
+    n = asyncio.run(uc.backfill_once())
+    assert calls == ["/api/v2/networks/solana/pools/POOL1/ohlcv/minute"]
+    assert n == sum(1 for r in rows if r[0] < start) and n > 0
+    got = {c.ts: c for c in db.get_candles(md.mint, 0, "local")}
+    assert got[int(start)].close == 9 and got[int(start)].n_snapshots == 2        # live candle untouched
+    assert all(c.n_snapshots == 0 and c.buys == 0 for t, c in got.items() if t < start)
+    assert asyncio.run(uc.backfill_once()) == 0                                   # not retried within 30 min
+    db.close()

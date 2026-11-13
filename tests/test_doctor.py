@@ -173,7 +173,10 @@ def test_stubs_are_marked():
     for mod in ("signals", "strategies", "judge", "universes"):       # phase 5: implemented
         m = importlib.import_module(f"shadow.{mod}")
         assert m.PHASE == 5 and m.IMPLEMENTED is True
-    for mod, ph in [("paper", 6), ("telegram_bot", 8), ("dashboard", 9)]:
+    for mod in ("paper", "learning", "reports"):                      # phase 6: implemented
+        m = importlib.import_module(f"shadow.{mod}")
+        assert m.PHASE == 6 and m.IMPLEMENTED is True
+    for mod, ph in [("telegram_bot", 8), ("dashboard", 9)]:
         m = importlib.import_module(f"shadow.{mod}")
         assert m.PHASE == ph and m.IMPLEMENTED is False
         with pytest.raises(NotImplementedError):
@@ -186,3 +189,11 @@ def test_live_required_sources_reachable(tmp_settings):
     res = asyncio.run(doctor.check_network(tmp_settings))
     failed = [f"{c.name}: {c.detail}" for c in res if c.status == doctor.FAIL]
     assert not failed, failed
+
+
+def test_rugcheck_400_no_report_is_warn_not_fail():
+    from shadow.doctor import _classify, WARN
+    from shadow.sources import ENDPOINTS
+    e = next(x for x in ENDPOINTS if x.name == "rugcheck_summary")
+    status, detail = _classify(e, 400, '{"error":"unable to generate report"}')
+    assert status == WARN and "reachable" in detail

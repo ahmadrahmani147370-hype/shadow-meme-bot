@@ -115,7 +115,7 @@ def test_record_and_outcome(tmp_path):
     assert vid
     db.set_judge_outcome(sid, "win", 12.5, NOW + 600)
     row = db.con.execute("SELECT verdict, outcome, outcome_pnl_pct, judge_version, inputs_json FROM judge_verdicts").fetchone()
-    assert row[0] == APPROVE and row[1] == "win" and row[2] == 12.5 and row[3] == "judge-1"
+    assert row[0] == APPROVE and row[1] == "win" and row[2] == 12.5 and row[3] == "judge-1/p1"
     assert json.loads(row[4])["features"]["liquidity"] == 30000
     hist = db.judge_history()
     assert hist and hist[0]["verdict"] == APPROVE

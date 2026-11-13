@@ -77,12 +77,48 @@ def judge_accuracy(history: list[dict]) -> dict:
     return {"approved_win_rate": a, "approved_n": na, "vetoed_win_rate": v, "vetoed_n": nv}
 
 
+# Thresholds phase-6 learning may tune (stored as versions of strategy "judge" in strategy_params)
+JUDGE_TUNABLE = ("min_confidence", "max_impact_pct", "max_sell_loss_pct", "min_liq_new", "min_liq_large")
+JUDGE_LIMITS = {"min_confidence": (0.45, 0.90), "max_impact_pct": (0.5, 10.0), "max_sell_loss_pct": (2.0, 25.0),
+                "min_liq_new": (3000.0, 100000.0), "min_liq_large": (20000.0, 1000000.0)}
+
+
+def default_judge_params(s: Settings) -> dict:
+    return {"min_confidence": s.judge_min_confidence, "max_impact_pct": s.judge_max_impact_pct,
+            "max_sell_loss_pct": s.judge_max_sell_loss_pct, "min_liq_new": s.judge_min_liq_new,
+            "min_liq_large": s.judge_min_liq_large}
+
+
+def ensure_judge_params(db: Database, s: Settings) -> dict:
+    """Seed version 1 of the judge thresholds from .env; return the active row."""
+    row = db.active_strategy_params("judge")
+    if row is None and not db.strategy_param_versions("judge"):
+        db.save_strategy_params("judge", 1, default_judge_params(s), [], "default", note="phase 6: thresholds from .env")
+        row = db.active_strategy_params("judge")
+    return row
+
+
 class Judge:
     def __init__(self, settings: Settings, db: Database | None = None):
         self.s, self.db = settings, db
+        self.params, self.params_version = default_judge_params(settings), 0
+        self.reload()
+
+    def reload(self) -> None:
+        """Pick up tuned thresholds (phase-6 learning) - the .env values are version 1."""
+        if self.db is None:
+            return
+        row = ensure_judge_params(self.db, self.s)
+        if row:
+            self.params = {**default_judge_params(self.s), **row["params"]}
+            self.params_version = row["version"]
+
+    @property
+    def version(self) -> str:
+        return f"{JUDGE_VERSION}/p{self.params_version}"
 
     def review(self, signal: dict, report, md, ev, context: dict) -> JudgeVerdict:
-        s = self.s
+        s, P = self.s, self.params
         reasons: list[dict] = []
         hard = lambda c, d: reasons.append({"code": c, "kind": "hard", "detail": d})  # noqa: E731
         soft = lambda c, d, pen: reasons.append({"code": c, "kind": "soft", "detail": d, "penalty": pen})  # noqa: E731
@@ -99,14 +135,14 @@ class Judge:
             hard("stale_quote", "no sell quote" if age is None else f"sell quote {age:.0f}s old")
         else:
             imp = q.get("impact_pct") or 0.0
-            if imp > s.judge_max_impact_pct:
-                hard("impact", f"selling ${s.paper_trade_size:g} moves price {imp:.1f}% (max {s.judge_max_impact_pct:g}%)")
+            if imp > P["max_impact_pct"]:
+                hard("impact", f"selling ${s.paper_trade_size:g} moves price {imp:.1f}% (max {P['max_impact_pct']:g}%)")
             loss = report.data.get("sell_loss_pct")
-            if loss is not None and loss > s.judge_max_sell_loss_pct:
-                hard("spread", f"round trip loses {loss:.1f}% (max {s.judge_max_sell_loss_pct:g}%)")
+            if loss is not None and loss > P["max_sell_loss_pct"]:
+                hard("spread", f"round trip loses {loss:.1f}% (max {P['max_sell_loss_pct']:g}%)")
         # liquidity for the size and the universe
         liq = f.get("liquidity") or 0
-        need = s.judge_min_liq_new if universe == U_NEW else s.judge_min_liq_large
+        need = P["min_liq_new"] if universe == U_NEW else P["min_liq_large"]
         if liq < need:
             hard("thin_liquidity", f"liquidity ${liq:,.0f} < ${need:,.0f} for {universe} coins")
         # late entry after an extended move
@@ -163,13 +199,17 @@ class Judge:
         conf = round(max(0.0, min(1.0, conf)), 3)
         if any(r["kind"] == "hard" for r in reasons):
             verdict = VETO
-        elif conf < s.judge_min_confidence:
+        elif conf < P["min_confidence"]:
             verdict = VETO
             reasons.append({"code": "low_confidence", "kind": "hard",
-                            "detail": f"confidence {conf:.2f} < {s.judge_min_confidence:.2f}"})
+                            "detail": f"confidence {conf:.2f} < {P['min_confidence']:.2f}"})
         else:
             verdict = APPROVE
-        return JudgeVerdict(verdict, conf, reasons)
+        v = JudgeVerdict(verdict, conf, reasons, self.version)
+        v.inputs = {"universe": universe, "liquidity": liq, "impact_pct": q.get("impact_pct"),
+                    "sell_loss_pct": report.data.get("sell_loss_pct") if report else None, "confidence": conf,
+                    "judge_params_version": self.params_version}
+        return v
 
     def record(self, signal_id: int, signal: dict, v: JudgeVerdict) -> int | None:
         if self.db is None:
@@ -177,7 +217,7 @@ class Judge:
         inputs = {"score": signal.get("score"), "class": signal.get("class"), "price": signal.get("price"),
                   "liquidity": signal.get("liquidity"), "safety": signal.get("safety_verdict"),
                   "safety_score": signal.get("safety_score"), "params_version": signal.get("params_version"),
-                  "features": json.loads(signal.get("features_json") or "{}")}
+                  "features": json.loads(signal.get("features_json") or "{}"), **(getattr(v, "inputs", None) or {})}
         return self.db.add_judge_verdict({"signal_id": signal_id, "ts": signal.get("ts") or time.time(),
                                           "mint": signal["mint"], "universe": signal.get("universe"),
                                           "strategy": signal.get("strategy"), "verdict": v.verdict,
@@ -185,4 +225,4 @@ class Judge:
                                           "inputs_json": json.dumps(inputs), "judge_version": v.version})
 
 
-__all__ = ["Judge", "JudgeVerdict", "strategy_health", "judge_accuracy", "APPROVE", "VETO", "JUDGE_VERSION"]
+__all__ = ["JUDGE_TUNABLE", "JUDGE_LIMITS", "default_judge_params", "ensure_judge_params", "Judge", "JudgeVerdict", "strategy_health", "judge_accuracy", "APPROVE", "VETO", "JUDGE_VERSION"]

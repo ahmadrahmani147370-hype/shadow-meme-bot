@@ -369,7 +369,7 @@ def test_schema_upgrade_v1_to_v2_keeps_seen_tokens(tmp_path):
     con.commit()
     con.close()
     db = Database(p)
-    assert db.version == SCHEMA_VERSION == 4 and db.is_seen("KEEP")
+    assert db.version == SCHEMA_VERSION == 5 and db.is_seen("KEEP")
     assert db.table_counts()["candles_1m"] == 0
 
 

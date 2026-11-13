@@ -143,6 +143,42 @@ MIGRATIONS: list[str] = [
         filtered_json TEXT, calls INTEGER
     );
     """,
+    # v5 (phase 6): paper trading, price paths of watches (for learning), learning log, strategy updates
+    """
+    ALTER TABLE signals ADD COLUMN path_json TEXT;
+    CREATE TABLE IF NOT EXISTS paper_account (
+        id INTEGER PRIMARY KEY CHECK (id = 1), start_balance REAL NOT NULL, cash REAL NOT NULL,
+        realized_pnl REAL NOT NULL DEFAULT 0, fees_paid REAL NOT NULL DEFAULT 0, created_ts REAL NOT NULL,
+        updated_ts REAL NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS paper_positions (
+        id INTEGER PRIMARY KEY, signal_id INTEGER, mint TEXT NOT NULL, symbol TEXT, universe TEXT, strategy TEXT,
+        params_version INTEGER, status TEXT NOT NULL, open_ts REAL NOT NULL, market_price REAL, entry_price REAL,
+        size_usd REAL, qty REAL, buy_fee REAL, entry_slippage_pct REAL, sl REAL, tp REAL, trail_pct REAL,
+        trail_activate_pct REAL, peak_price REAL, time_stop_min REAL, judge_confidence REAL, score REAL,
+        last_price REAL, last_price_ts REAL, exit_ts REAL, exit_market_price REAL, exit_price REAL, sell_fee REAL,
+        exit_slippage_pct REAL, exit_reason TEXT, proceeds REAL, pnl_usd REAL, pnl_pct REAL, max_up_pct REAL,
+        max_down_pct REAL
+    );
+    CREATE INDEX IF NOT EXISTS idx_paper_status ON paper_positions(status, open_ts);
+    CREATE INDEX IF NOT EXISTS idx_paper_strategy ON paper_positions(strategy, exit_ts);
+    CREATE TABLE IF NOT EXISTS paper_equity (
+        ts REAL PRIMARY KEY, cash REAL, open_value REAL, equity REAL, n_open INTEGER, realized_pnl REAL
+    );
+    CREATE TABLE IF NOT EXISTS learning_log (
+        id INTEGER PRIMARY KEY, ts REAL NOT NULL, target TEXT NOT NULL, action TEXT NOT NULL,
+        from_version INTEGER, to_version INTEGER, reason TEXT, metrics_json TEXT, changes_json TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_learning_ts ON learning_log(target, ts);
+    -- every applied self-improvement (param version change, rollback, judge threshold change):
+    -- phase 8 sends unsent rows to Telegram, /strategies shows the history
+    CREATE TABLE IF NOT EXISTS strategy_updates (
+        id INTEGER PRIMARY KEY, ts REAL NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL,
+        from_version INTEGER, to_version INTEGER, changes_json TEXT NOT NULL, reason TEXT NOT NULL,
+        metrics_json TEXT NOT NULL, sent_ts REAL
+    );
+    CREATE INDEX IF NOT EXISTS idx_updates_sent ON strategy_updates(sent_ts, ts);
+    """,
 ]
 
 MARKET_COLS = ("mint", "symbol", "name", "pair_address", "dex_id", "quote_symbol", "price_usd", "price_native",
@@ -323,6 +359,16 @@ class Database:
                       c.source) for c in candles])
 
 
+    def insert_candles_ignore(self, candles: list[Candle]) -> None:
+        """Backfill: never replaces a candle that already exists."""
+        if candles:
+            with self.con:
+                self.con.executemany(
+                    "INSERT OR IGNORE INTO candles_1m (mint, ts, open, high, low, close, volume_usd, buys, sells,"
+                    " n_snapshots, source) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    [(c.mint, c.ts, c.open, c.high, c.low, c.close, c.volume_usd, c.buys, c.sells, c.n_snapshots,
+                      c.source) for c in candles])
+
     def get_candles(self, mint: str, since_ts: float = 0, source: str = "local") -> list[Candle]:
         rows = self.con.execute("SELECT * FROM candles_1m WHERE mint=? AND ts>=? AND source=? ORDER BY ts",
                                 (mint, since_ts, source)).fetchall()
@@ -356,6 +402,8 @@ class Database:
                                               (now - 30 * 86400,)).rowcount
             self.con.execute("DELETE FROM judge_verdicts WHERE ts < ?", (now - 30 * 86400,))
             self.con.execute("DELETE FROM universe_runs WHERE ts < ?", (now - 7 * 86400,))
+            self.con.execute("DELETE FROM paper_equity WHERE ts < ?", (now - 30 * 86400,))
+            self.con.execute("DELETE FROM learning_log WHERE ts < ?", (now - 90 * 86400,))
             out["blacklist"] = self.con.execute("DELETE FROM creator_blacklist WHERE ts < ?",
                                                 (now - 30 * 86400,)).rowcount
             self.con.execute("UPDATE seen_tokens SET raw_json=NULL WHERE raw_json IS NOT NULL AND first_seen_ts < ?",
@@ -369,7 +417,8 @@ class Database:
         return {t: self.con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
                 for t in ("seen_tokens", "token_market", "price_snapshots", "candles_1m", "collector_drops",
                           "safety_reports", "rugcheck_cache", "creator_blacklist", "universe_members", "signals",
-                          "judge_verdicts", "strategy_params", "universe_runs")}
+                          "judge_verdicts", "strategy_params", "universe_runs", "paper_positions", "paper_equity",
+                          "learning_log", "strategy_updates")}
 
     # ---------------------------------------------------------------- phase 4 tables
     def save_safety(self, row: dict) -> None:
@@ -515,6 +564,59 @@ class Database:
         d = dict(r)
         d["params"], d["universes"] = json.loads(d.pop("params_json")), json.loads(d.pop("universes_json"))
         return d
+
+    def strategy_params_version(self, strategy: str, version: int) -> dict | None:
+        r = self.con.execute("SELECT * FROM strategy_params WHERE strategy=? AND version=?", (strategy, version)).fetchone()
+        if not r:
+            return None
+        d = dict(r)
+        d["params"], d["universes"] = json.loads(d.pop("params_json")), json.loads(d.pop("universes_json"))
+        return d
+
+    # ---------------------------------------------------------------- phase 6: learning + notifications
+    def add_learning_log(self, target: str, action: str, reason: str, metrics: dict | None = None,
+                         changes: dict | None = None, from_version: int | None = None, to_version: int | None = None,
+                         ts: float | None = None) -> int:
+        with self.con:
+            cur = self.con.execute(
+                "INSERT INTO learning_log (ts, target, action, from_version, to_version, reason, metrics_json, changes_json)"
+                " VALUES (?,?,?,?,?,?,?,?)", (ts or time.time(), target, action, from_version, to_version, reason,
+                                              json.dumps(metrics or {}), json.dumps(changes or {})))
+        return cur.lastrowid
+
+    def learning_log(self, target: str | None = None, limit: int = 50) -> list[dict]:
+        q, a = "SELECT * FROM learning_log", []
+        if target:
+            q, a = q + " WHERE target=?", [target]
+        rows = [dict(r) for r in self.con.execute(q + " ORDER BY id DESC LIMIT ?", a + [limit])]
+        for r in rows:
+            r["metrics"], r["changes"] = json.loads(r.pop("metrics_json") or "{}"), json.loads(r.pop("changes_json") or "{}")
+        return rows
+
+    def add_strategy_update(self, kind: str, target: str, from_version: int | None, to_version: int | None,
+                            changes: dict, reason: str, metrics: dict, ts: float | None = None) -> int:
+        with self.con:
+            cur = self.con.execute(
+                "INSERT INTO strategy_updates (ts, kind, target, from_version, to_version, changes_json, reason, metrics_json)"
+                " VALUES (?,?,?,?,?,?,?,?)", (ts or time.time(), kind, target, from_version, to_version,
+                                              json.dumps(changes), reason, json.dumps(metrics)))
+        return cur.lastrowid
+
+    def strategy_updates(self, unsent_only: bool = False, target: str | None = None, limit: int = 50) -> list[dict]:
+        q, a = "SELECT * FROM strategy_updates WHERE 1=1", []
+        if unsent_only:
+            q += " AND sent_ts IS NULL"
+        if target:
+            q, a = q + " AND target=?", a + [target]
+        rows = [dict(r) for r in self.con.execute(q + (" ORDER BY id" if unsent_only else " ORDER BY id DESC")
+                                                  + " LIMIT ?", a + [limit])]
+        for r in rows:
+            r["changes"], r["metrics"] = json.loads(r.pop("changes_json")), json.loads(r.pop("metrics_json"))
+        return rows
+
+    def mark_strategy_updates_sent(self, ids: list[int], ts: float | None = None) -> None:
+        with self.con:
+            self.con.executemany("UPDATE strategy_updates SET sent_ts=? WHERE id=?", [(ts or time.time(), i) for i in ids])
 
     def strategy_param_versions(self, strategy: str) -> list[dict]:
         return [dict(r) for r in self.con.execute(

@@ -39,7 +39,19 @@ def _print(row: dict, verdict) -> None:
     print(head, flush=True)
 
 
-async def run_signals(s: Settings, seconds: float = 600, quiet_rejects: bool = False) -> dict:
+def _print_trade(kind: str, p: dict) -> None:
+    t = time.strftime("%H:%M:%S")
+    if kind == "OPEN":
+        print(f"{t} 💰 PAPER OPEN  #{p['id']} [{p['universe']}] {p['symbol'] or p['mint'][:8]} {p['strategy']} "
+              f"${p['size_usd']:.2f} @ {p['entry_price']:.6g} (market {p['market_price']:.6g}, slippage "
+              f"{p['entry_slippage_pct']:.2f}%, fee ${p['buy_fee']:.2f}) SL {p['sl']:.6g} TP {p['tp']:.6g}", flush=True)
+    else:
+        print(f"{t} 💵 PAPER CLOSE #{p['id']} [{p['universe']}] {p['symbol'] or p['mint'][:8]} {p['exit_reason']} "
+              f"@ {p['exit_price']:.6g} (market {p['exit_market_price']:.6g}, slippage {p['exit_slippage_pct']:.2f}%) "
+              f"P&L after fees ${p['pnl_usd']:+.2f} ({p['pnl_pct']:+.1f}%)", flush=True)
+
+
+async def run_signals(s: Settings, seconds: float = 600, quiet_rejects: bool = False, with_paper: bool = False) -> dict:
     path = str(s.path(s.db_path))
     db = Database(path)
     limiters = make_limiters()
@@ -49,7 +61,17 @@ async def run_signals(s: Settings, seconds: float = 600, quiet_rejects: bool = F
     src = Sources(col, uni)
     chk = SafetyChecker(s, db, limiters=limiters, market_fn=src.get_market)
     judge = Judge(s, db)
-    eng = SignalEngine(s, db, src, checker=chk, judge=judge,
+    paper = learner = client = None
+    if with_paper:
+        import httpx
+
+        from .learning import Learner
+        from .net import UA
+        from .paper import PaperEngine
+        client = httpx.AsyncClient(timeout=s.http_timeout_sec, headers={"User-Agent": UA, "Accept": "application/json"})
+        paper = PaperEngine(s, db, src=src, checker=chk, limiters=limiters, client=client, on_trade=_print_trade)
+        learner = Learner(s, db, judge=judge)
+    eng = SignalEngine(s, db, src, checker=chk, judge=judge, paper=paper,
                        on_signal=lambda row, v: None if (quiet_rejects and row["alert_type"] == "REJECT") else _print(row, v))
     db0 = _db_bytes(path, wal=False)
     print(f"SHADOW MEME signals live test - {seconds:.0f}s | new-launch cap {s.max_tracked} | MCAP >= "
@@ -63,6 +85,19 @@ async def run_signals(s: Settings, seconds: float = 600, quiet_rejects: bool = F
              asyncio.create_task(eng.run())]
     if uni:
         tasks.append(asyncio.create_task(uni.run()))
+    learn_runs = []
+
+    async def learn_loop():
+        while True:
+            res = learner.run_once()
+            learn_runs.append(res)
+            acts = [r for r in res if r.get("action") in ("activate", "rollback")]
+            print(f"--- {time.strftime('%H:%M:%S')} learning: " + ("; ".join(f"{r['target']} {r['action']}: {r.get('reason')}"
+                  for r in acts) if acts else ", ".join(sorted({f"{r['target']}={r['action']}" for r in res}))), flush=True)
+            await asyncio.sleep(s.learn_every_min * 60)
+
+    if learner is not None:
+        tasks.append(asyncio.create_task(learn_loop()))
 
     async def status():
         nonlocal cpu_prev, t_prev
@@ -82,6 +117,12 @@ async def run_signals(s: Settings, seconds: float = 600, quiet_rejects: bool = F
                   f"evals {st['evaluations']} | BUY_WATCH {st['alert_BUY_WATCH']} (approve {st['judge_APPROVE']} / veto "
                   f"{st['judge_VETO']}) SELL {st['alert_SELL']} HOLD {st['alert_HOLD']} REJECT {st['alert_REJECT']} | "
                   f"CPU {row['cpu_pct']}% RSS {row['rss_mb']} MB DB {row['db_mb']} MB", flush=True)
+            if paper is not None:
+                e = paper.equity()
+                print(f"    paper: equity ${e['equity']:.2f} cash ${e['cash']:.2f} open {e['n_open']} | opened "
+                      f"{paper.stats['opened']} closed {paper.stats['closed']} | realized ${e['realized_pnl']:+.2f} | "
+                      f"backfilled {uni.stats['backfilled_coins'] if uni else 0} coins / "
+                      f"{uni.stats['backfilled_candles'] if uni else 0} candles", flush=True)
 
     tasks.append(asyncio.create_task(status()))
     try:
@@ -156,9 +197,36 @@ async def run_signals(s: Settings, seconds: float = 600, quiet_rejects: bool = F
           f"{(cur_kb or 0) / 1024:.1f} MB, peak {max(peak_kb, cur_kb or 0) / 1024:.1f} MB")
     print(f"== database (after WAL checkpoint) == {db0 / 1e6:.2f} MB -> {db1 / 1e6:.2f} MB")
     print(f"  tables {db.table_counts()}")
+    if with_paper:
+        from .learning import cost_pct, judge_stats
+        from .reports import history_text, paper_text, positions_text, report_text, strategies_text
+        final = learner.run_once()
+        print("\n== paper trading ==")
+        print(paper_text(db, s))
+        print(positions_text(db))
+        print(history_text(db, 20))
+        print(f"  opened {paper.stats['opened']} | closed {paper.stats['closed']} | exits "
+              f"{ {k[5:]: v for k, v in paper.stats.items() if k.startswith('exit_')} } | not opened: {dict(paper.skips)}")
+        print("== daily report ==")
+        print(report_text(db, s))
+        js = judge_stats(db, wall0, cost_pct(s))
+        print("== judge accuracy (this run, virtual outcomes) ==")
+        print(f"  approved {js['approved']} | vetoed {js['vetoed']} | veto precision {js['veto_precision']} | "
+              f"edge {js['edge_pct']}")
+        print(f"  by reason {js['by_reason']}")
+        print("== self-learning ==")
+        for r in final:
+            print(f"  {r}")
+        print(strategies_text(db, s))
+        print(f"== universe backfill (GeckoTerminal) == coins {uni.stats['backfilled_coins'] if uni else 0}, candles "
+              f"{uni.stats['backfilled_candles'] if uni else 0}")
+        await client.aclose()
     errs = list(eng.errors)[-5:] + list(chk.errors)[-5:] + list(col.errors)[-5:] + (list(uni.errors)[-5:] if uni else []) \
         + list(sc.snapshot()["last_errors"])
-    errors_total = eng.stats["errors"] + chk.stats["errors"] + col.stats["errors"] + (uni.stats["errors"] if uni else 0)
+    if paper is not None:
+        errs += list(paper.errors)[-5:]
+    errors_total = eng.stats["errors"] + chk.stats["errors"] + col.stats["errors"] + (uni.stats["errors"] if uni else 0) \
+        + (len(paper.errors) if paper is not None else 0)
     print(f"== errors == {errors_total}")
     for e in errs:
         print(f"  {e}")

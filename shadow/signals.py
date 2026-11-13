@@ -110,7 +110,10 @@ def compute_features(candles: list[Candle], md: MarketData | None, universe: str
     closes = [c.close for c in cs]
     highs, lows, opens = [c.high for c in cs], [c.low for c in cs], [c.open for c in cs]
     vols = [c.volume_usd or 0.0 for c in cs]
-    buys, sells = [c.buys or 0 for c in cs], [c.sells or 0 for c in cs]
+    # order flow only from candles built from live snapshots: GeckoTerminal backfill and gap-fill
+    # candles (n_snapshots == 0) carry no buy/sell counts
+    fl = [c for c in cs if c.n_snapshots] if any(c.n_snapshots for c in cs) else cs
+    buys, sells = [c.buys or 0 for c in fl], [c.sells or 0 for c in fl]
     price = (md.price_usd if md and md.price_usd else None) or (closes[-1] if closes else None)
     f["price"] = price
     for k in (1, 3, 5, 15, 30, 60):
@@ -137,7 +140,7 @@ def compute_features(candles: list[Candle], md: MarketData | None, universe: str
     f["buy_ratio_slope"] = _slope(br)
     prior = buys[-15:-5]
     f["buyer_growth"] = (statistics.fmean(buys[-5:]) / max(statistics.fmean(prior), 0.5)) if len(prior) >= 3 else None
-    f["sell_ratio_1m"] = (sells[-1] / (buys[-1] + sells[-1])) if n and buys[-1] + sells[-1] else None
+    f["sell_ratio_1m"] = (sells[-1] / (buys[-1] + sells[-1])) if buys and buys[-1] + sells[-1] else None
     # structure
     if n:
         pk = max(range(n), key=lambda i: highs[i])
@@ -322,11 +325,13 @@ class Sources:
 
 class SignalEngine:
     def __init__(self, settings: Settings, db: Database, sources: Sources, *, checker=None, judge=None,
-                 clock=time.time, on_signal=None):
+                 clock=time.time, on_signal=None, paper=None):
         self.s, self.db, self.src = settings, db, sources
         self.checker, self.judge = checker, judge
         self.clock = clock
         self.on_signal = on_signal
+        self.paper = paper                              # phase 6 PaperEngine (opens trades on APPROVED watches)
+        self.paths: dict[int, dict] = {}                # price path after each BUY WATCH (self-learning input)
         self.strategies: dict[str, Strategy] = load_strategies(db)
         self.proximity: dict[str, tuple[float, float]] = {}
         self.last_signal: dict[tuple, float] = {}
@@ -339,6 +344,43 @@ class SignalEngine:
         self._stop = asyncio.Event()
         if checker is not None:
             checker.near_fn = self.near_signal
+        self._reload_open()
+
+    PATH_EVERY_SEC = 30
+
+    def _reload_open(self) -> None:
+        """Open watches survive a restart (their price path restarts from the reload)."""
+        for r in self.db.open_signals():
+            if r["alert_type"] != BUY_WATCH or not r["entry"]:
+                continue
+            seen = self.db.get_seen(r["mint"]) or {}
+            self.open[r["id"]] = {"id": r["id"], "mint": r["mint"], "strategy": r["strategy"], "universe": r["universe"],
+                                  "entry": r["entry"], "sl": r["sl"], "tp": r["tp"], "time_stop_min": r["time_stop_min"],
+                                  "ts": r["ts"], "max_up": r["max_up_pct"] or 0.0, "max_down": r["max_down_pct"] or 0.0,
+                                  "last_hold": r["ts"], "approved": r["judge_verdict"] == "APPROVE",
+                                  "symbol": r["symbol"] or "", "creator": seen.get("creator")}
+            self._start_path(r["id"], r["mint"], r["entry"], r["ts"], r["time_stop_min"] or 30,
+                             json.loads(r.get("path_json") or "[]"))
+            self.stats["reloaded_open"] += 1
+
+    def _start_path(self, sid: int, mint: str, entry: float, ts: float, time_stop_min: float, pts=None) -> None:
+        horizon = max(60.0, 2.0 * float(time_stop_min)) * 60     # follow past the exit: learning can test longer stops
+        self.paths[sid] = {"mint": mint, "ts": ts, "entry": entry, "until": ts + horizon, "pts": list(pts or []),
+                           "last": 0.0, "seen": self.clock()}
+
+    def _track_paths(self, evals: dict, now: float, flush_all: bool = False) -> None:
+        for sid, pth in list(self.paths.items()):
+            ev = evals.get(pth["mint"])
+            md = self.src.get_market(pth["mint"])
+            price = (ev.features.get("price") if ev else None) or (md.price_usd if md else None)
+            if price and now - pth["last"] >= self.PATH_EVERY_SEC:
+                pth["pts"].append([round(now - pth["ts"]), price])
+                pth["last"], pth["seen"] = now, now
+            done = now >= pth["until"] or now - pth["seen"] > 900 or flush_all
+            if done or len(pth["pts"]) % 10 == 0 and price and pth["last"] == now:
+                self.db.update_signal(sid, path_json=json.dumps(pth["pts"], separators=(",", ":")))
+            if done and not flush_all:
+                self.paths.pop(sid, None)
 
     # ---- quote proximity for the safety checker (replaces the phase-4 volume placeholder)
     def near_signal(self, mint: str, md=None, rep=None) -> bool:
@@ -457,6 +499,13 @@ class SignalEngine:
                     if r["kind"] == "hard":
                         self.veto_reasons[r["code"]] += 1
         md = self.src.get_market(ev.mint)
+        self._start_path(sid, ev.mint, p["entry"], now, p["time_stop_min"])
+        if self.paper is not None and verdict is not None and verdict.verdict == "APPROVE":
+            try:
+                self.paper.open_from_signal(row, rep, self.strategies[st.name].p(ev.universe))
+            except Exception as e:  # paper must never break signalling
+                self.stats["errors"] += 1
+                self.errors.append(f"{time.strftime('%H:%M:%S')} paper open: {type(e).__name__}: {e}")
         self.open[sid] = {"id": sid, "mint": ev.mint, "strategy": st.name, "universe": ev.universe, "entry": p["entry"],
                           "sl": p["sl"], "tp": p["tp"], "time_stop_min": p["time_stop_min"], "ts": now,
                           "max_up": 0.0, "max_down": 0.0, "last_hold": now, "approved": bool(verdict and verdict.verdict == "APPROVE"),
@@ -511,6 +560,8 @@ class SignalEngine:
         self.stats[f"closed_{reason}"] += 1
         self.stats["closed_approved" if o["approved"] else "closed_vetoed"] += 1
         self.stats[f"outcome_{'approved' if o['approved'] else 'vetoed'}_{outcome}"] += 1
+        if o["approved"] and self.paper is not None and reason in ("dump_warning", "exhaustion"):
+            self.paper.close_by_signal(o["id"], reason)    # SELL signal exits the paper trade too
         if ev is not None and o["approved"]:     # vetoed watches are tracked silently (judge accuracy only)
             st = self.strategies.get(o["strategy"])
             self._emit(self._row(ev, st, SELL, f"{reason} {'' if pnl is None else f'{pnl:+.1f}%'} "
@@ -545,6 +596,13 @@ class SignalEngine:
         for m in [m for m, (_, ts) in self.proximity.items() if now - ts > 300]:
             self.proximity.pop(m, None)
         self.manage_open(evals)
+        self._track_paths(evals, now)
+        if self.paper is not None:
+            try:
+                await self.paper.manage()
+            except Exception as e:
+                self.stats["errors"] += 1
+                self.errors.append(f"{time.strftime('%H:%M:%S')} paper manage: {type(e).__name__}: {e}")
         return len(evals)
 
     async def run(self) -> None:
@@ -564,6 +622,10 @@ class SignalEngine:
 
     async def stop(self) -> None:
         self._stop.set()
+        try:
+            self._track_paths({}, self.clock(), flush_all=True)
+        except Exception:
+            pass
 
 
 __all__ = ["SignalEngine", "Sources", "Evaluation", "Det", "compute_features", "run_detectors", "score_signal",

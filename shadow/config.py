@@ -107,7 +107,7 @@ class Settings:
     no_pair_ttl_sec: int = 300     # give up on tokens without a DexScreener pair after this
     dead_after_min: int = 10       # stop tracking a token with no trades for this long
     hot_size: int = 3              # tokens that also get GeckoTerminal OHLCV
-    hot_refresh_sec: int = 90
+    hot_refresh_sec: int = 180     # 1 GT call/min: the other GT minute goes to universe backfill
     jup_refresh_sec: int = 60      # Jupiter price/liquidity fill-in for tracked tokens
     snapshot_retention_h: int = 3      # signals look back <= MAX_TOKEN_AGE_MIN (2 h)
     candle_retention_h: int = 6        # tokens are tracked <= 2 h; older candles are never read
@@ -185,6 +185,25 @@ class Settings:
     paper_max_open: int = 5
     paper_daily_target: int = 50   # a target, never a quota: weak signals are never forced
     min_trade_score: int = 65      # only "Watch" (65-79) or "Strong Watch" (80-100) may open a paper trade
+    paper_min_slippage_pct: float = 0.5   # entry/exit slippage = Jupiter quote price impact, at least this
+    paper_exit_quote_max_age_sec: int = 600  # older quote at exit -> PAPER_SLIPPAGE_PCT is used instead
+    paper_no_price_close_min: int = 30    # no price for this long -> close at the last known price
+    paper_equity_every_sec: int = 60
+
+    # Self-learning (phase 6): guarded tuning of strategy params and judge thresholds
+    learn_enabled: bool = True
+    learn_every_min: int = 30
+    learn_min_trades: int = 30            # closed watches per strategy+universe before any change
+    learn_min_test: int = 10              # of which at least this many in the out-of-sample (latest) part
+    learn_train_frac: float = 0.7         # walk-forward: oldest 70% choose, newest 30% must confirm
+    learn_max_step_pct: float = 20.0      # one step changes one param by at most this %
+    learn_min_improve_pct: float = 0.5    # % points per opportunity, on train AND test
+    learn_cooldown_h: float = 6.0         # at most one change per strategy (or judge) per this many hours
+    learn_rollback_min: int = 10          # live samples of a new version before it is judged
+    learn_rollback_margin_pct: float = 0.0  # new version worse than the old one on the same samples -> rollback
+    judge_tuning_enabled: bool = True
+    universe_backfill_sec: int = 60       # one GeckoTerminal OHLCV backfill per minute for universe members
+    universe_backfill_minutes: int = 60
 
     paper_only: bool = field(default=PAPER_ONLY, init=False)
     warnings: tuple = ()
@@ -243,7 +262,7 @@ def load_settings(env_file: str | Path | None = None, env: dict | None = None) -
         no_pair_ttl_sec=_num(env, "NO_PAIR_TTL_SEC", 300, int, w, 30, 86400),
         dead_after_min=_num(env, "DEAD_AFTER_MIN", 10, int, w, 1, 1440),
         hot_size=_num(env, "HOT_SIZE", 3, int, w, 0, 20),
-        hot_refresh_sec=_num(env, "HOT_REFRESH_SEC", 90, int, w, 30, 3600),
+        hot_refresh_sec=_num(env, "HOT_REFRESH_SEC", 180, int, w, 30, 3600),
         jup_refresh_sec=_num(env, "JUP_REFRESH_SEC", 60, int, w, 10, 3600),
         snapshot_retention_h=_num(env, "SNAPSHOT_RETENTION_H", 3, int, w, 1, 720),
         candle_retention_h=_num(env, "CANDLE_RETENTION_H", 6, int, w, 1, 2160),
@@ -311,6 +330,23 @@ def load_settings(env_file: str | Path | None = None, env: dict | None = None) -
         paper_max_open=_num(env, "PAPER_MAX_OPEN", 5, int, w, 1, 50),
         paper_daily_target=_num(env, "PAPER_DAILY_TARGET", 50, int, w, 0, 10000),
         min_trade_score=_num(env, "MIN_TRADE_SCORE", 65, int, w, 50, 100),
+        paper_min_slippage_pct=_num(env, "PAPER_MIN_SLIPPAGE_PCT", 0.5, float, w, 0, 50),
+        paper_exit_quote_max_age_sec=_num(env, "PAPER_EXIT_QUOTE_MAX_AGE_SEC", 600, int, w, 10, 86400),
+        paper_no_price_close_min=_num(env, "PAPER_NO_PRICE_CLOSE_MIN", 30, int, w, 1, 10080),
+        paper_equity_every_sec=_num(env, "PAPER_EQUITY_EVERY_SEC", 60, int, w, 10, 86400),
+        learn_enabled=_str(env, "LEARN_ENABLED", "true").lower() in ("1", "true", "yes", "on"),
+        learn_every_min=_num(env, "LEARN_EVERY_MIN", 30, int, w, 1, 10080),
+        learn_min_trades=_num(env, "LEARN_MIN_TRADES", 30, int, w, 10, 100000),
+        learn_min_test=_num(env, "LEARN_MIN_TEST", 10, int, w, 3, 100000),
+        learn_train_frac=_num(env, "LEARN_TRAIN_FRAC", 0.7, float, w, 0.3, 0.9),
+        learn_max_step_pct=_num(env, "LEARN_MAX_STEP_PCT", 20.0, float, w, 1, 50),
+        learn_min_improve_pct=_num(env, "LEARN_MIN_IMPROVE_PCT", 0.5, float, w, 0, 100),
+        learn_cooldown_h=_num(env, "LEARN_COOLDOWN_H", 6.0, float, w, 0, 720),
+        learn_rollback_min=_num(env, "LEARN_ROLLBACK_MIN", 10, int, w, 3, 100000),
+        learn_rollback_margin_pct=_num(env, "LEARN_ROLLBACK_MARGIN_PCT", 0.0, float, w, 0, 100),
+        judge_tuning_enabled=_str(env, "JUDGE_TUNING_ENABLED", "true").lower() in ("1", "true", "yes", "on"),
+        universe_backfill_sec=_num(env, "UNIVERSE_BACKFILL_SEC", 60, int, w, 15, 86400),
+        universe_backfill_minutes=_num(env, "UNIVERSE_BACKFILL_MINUTES", 60, int, w, 10, 300),
         warnings=tuple(w),
     )
     if s.log_level not in ("DEBUG", "INFO", "WARNING", "ERROR"):

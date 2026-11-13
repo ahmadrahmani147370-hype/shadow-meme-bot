@@ -114,6 +114,15 @@ top boosts) give ~60 candidates; after the meme filter about 13 coins are ≥ $1
 new-launch collector have seen", not the whole market. GeckoTerminal is the tightest budget; a second
 page per list would add ~1.2 calls/min.
 
+## Phase 6: GeckoTerminal limit and universe backfill
+
+Probe on 13 Nov 2026 (10:05 PKT): 20 keyless requests to `trending_pools`, one every 2.5 s, gave
+5 × HTTP 200 and then 15 × HTTP 429 (`retry-after: 0`). The keyless budget is therefore smaller than the
+documented ~10/min in practice; the bot keeps its limiter at 6/min shared by everything. To make room
+for the universe backfill (`pools/{pool}/ohlcv/minute?aggregate=1&limit=60`, one coin per minute),
+the new-launch hot set now refreshes every 180 s (1 call/min instead of 2). Budget: scanner 3 + hot set 1
++ discovery 0.6 + backfill 1 = 5.6/min.
+
 ## Source plan for phases 2–4
 
 | Need | Primary | Fallback |

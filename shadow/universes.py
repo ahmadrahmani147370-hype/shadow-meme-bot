@@ -24,7 +24,7 @@ import time
 from collections import Counter, deque
 from dataclasses import dataclass, field, replace
 
-from .candles import CandleBuilder
+from .candles import CandleBuilder, parse_gt_ohlcv
 from .collector import DS_BATCH, DS_TOKENS, chunks, group_pairs, market_from_pairs, standard_quote
 from .config import Settings
 from .db import Database
@@ -145,6 +145,8 @@ class UTracked:
     builder: CandleBuilder
     last_ts: float
     cum: list = field(default_factory=lambda: [0.0, 0.0, 0.0])   # synthetic cumulative vol / buys / sells
+    start_ts: float = 0.0
+    backfill_tried: float = 0.0
 
 
 class UniverseCollector:
@@ -302,7 +304,7 @@ class UniverseCollector:
     def _start(self, md: MarketData, now: float) -> None:
         md.universe = self._universe_of(md.mint)
         b = CandleBuilder(md.mint)
-        t = UTracked(md, b, now)
+        t = UTracked(md, b, now, start_ts=now)
         b.add(now, md.price_usd, 0.0, 0.0, 0.0)
         self.tracked[md.mint] = t
         self.db.upsert_markets([md])
@@ -339,6 +341,43 @@ class UniverseCollector:
         self.stats["snapshots"] += len(rows)
         return len(rows)
 
+    # ---- GeckoTerminal backfill: members start with history instead of waiting 30+ minutes
+    def backfill_due(self) -> str | None:
+        now = self.clock()
+        best = None
+        for m, t in self.tracked.items():
+            if not t.market.pair_address or now - t.backfill_tried < 1800 or self.skip_fn(m):
+                continue
+            since = int((now - self.s.universe_backfill_minutes * 60) // 60) * 60
+            have = self.db.con.execute("SELECT COUNT(*) FROM candles_1m WHERE mint=? AND ts>=? AND source='local'",
+                                       (m, since)).fetchone()[0]
+            if have >= self.s.universe_backfill_minutes * 0.6:
+                continue
+            key = (m in self.members[U_MCAP], t.market.vol_h1)      # MCAP first, then the busiest
+            if best is None or key > best[0]:
+                best = (key, m)
+        return best[1] if best else None
+
+    async def backfill_once(self) -> int:
+        m = self.backfill_due()
+        if m is None:
+            return 0
+        t = self.tracked[m]
+        t.backfill_tried = self.clock()
+        data = await self._get("geckoterminal", GT_BASE + f"pools/{t.market.pair_address}/ohlcv/minute",
+                               {"aggregate": 1, "limit": self.s.universe_backfill_minutes, "currency": "usd",
+                                "token": m})
+        if not data:
+            return 0
+        start_min = int(t.start_ts // 60) * 60
+        cs = [replace(c, source="local", n_snapshots=0, buys=0, sells=0)
+              for c in parse_gt_ohlcv(m, data) if c.ts < start_min]      # never overwrite live candles
+        if cs:
+            self.db.insert_candles_ignore(cs)
+        self.stats["backfilled_coins"] += 1
+        self.stats["backfilled_candles"] += len(cs)
+        return len(cs)
+
     # ---- loops
     async def _every(self, seconds: float, fn, initial_delay: float = 0.0) -> None:
         if initial_delay:
@@ -366,7 +405,8 @@ class UniverseCollector:
                                              headers={"User-Agent": UA, "Accept": "application/json"})
         try:
             await asyncio.gather(self._every(self.s.universe_discover_sec, self.discover_once, 5),
-                                 self._every(self.s.universe_refresh_sec, self.refresh_once, 40))
+                                 self._every(self.s.universe_refresh_sec, self.refresh_once, 40),
+                                 self._every(self.s.universe_backfill_sec, self.backfill_once, 60))
         finally:
             if own:
                 await self._client.aclose()

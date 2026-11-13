@@ -245,3 +245,42 @@ def test_engine_waits_for_safety_and_quote(tmp_path):
     clock["t"] += 15
     asyncio.run(eng.step())
     assert out == [] and (md.mint, True) in chk.quotes
+
+
+def test_engine_paper_path_and_restart(tmp_path):
+    from shadow.paper import PaperEngine
+    cs, md = early_setup()
+    now = cs[-1].ts + 60
+    db = Database(str(tmp_path / "e.db"))
+    clock = {"t": now}
+    src = Sources(FakeCollector(md.mint, cs, md))
+    chk = FakeChecker(report(md.mint, now))
+    pe = PaperEngine(S, db, src=src, checker=chk, clock=lambda: clock["t"])
+    j = Judge(S, db)
+    eng = SignalEngine(S, db, src, checker=chk, judge=j, clock=lambda: clock["t"], paper=pe)
+    asyncio.run(eng.step())
+    watches = db.con.execute("SELECT id, judge_verdict FROM signals WHERE alert_type='BUY_WATCH'").fetchall()
+    assert watches
+    approved = [w for w in watches if w[1] == "APPROVE"]
+    assert len(pe.open_positions()) == min(1, len(approved))        # one position per coin
+    for i in range(3):
+        clock["t"] += 30
+        asyncio.run(eng.step())
+    asyncio.run(eng.stop())
+    pth = json.loads(db.get_signal(watches[0][0])["path_json"])
+    assert len(pth) >= 3 and pth[0][1] == md.price_usd
+    # restart: open watches come back from SQLite
+    eng2 = SignalEngine(S, db, src, checker=chk, judge=j, clock=lambda: clock["t"], paper=pe)
+    assert set(eng2.open) == {w[0] for w in watches} and eng2.stats["reloaded_open"] == len(watches)
+    db.close()
+
+
+def test_backfill_flow_features_ignore_backfilled_candles():
+    # backfilled / gap-filled candles (n_snapshots=0) carry no buys/sells and must not fake a buyer surge
+    key = next(k for k in FIX["series"] if k.startswith("live_p5:"))
+    cs = candles(key)
+    back = [Candle(c.mint, c.ts - 3600, c.open, c.high, c.low, c.close, c.volume_usd, 0, 0, 0, "local") for c in cs]
+    md = MarketData(cs[0].mint, liquidity_usd=50000)
+    f1 = compute_features(cs, md, "new", cs[-1].ts + 60)
+    f2 = compute_features(back + cs, md, "new", cs[-1].ts + 60)
+    assert f1["buy_ratio_5m"] == f2["buy_ratio_5m"] and f1["buyer_growth"] == f2["buyer_growth"]
