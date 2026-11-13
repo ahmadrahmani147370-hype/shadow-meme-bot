@@ -179,11 +179,13 @@ def test_stubs_are_marked():
     for mod in ("db", "maintenance", "export"):                       # phase 7: implemented
         m = importlib.import_module(f"shadow.{mod}")
         assert m.PHASE == 7 and m.IMPLEMENTED is True
-    for mod, ph in [("telegram_bot", 8), ("dashboard", 9)]:
+    for mod in ("telegram_bot", "telegram_api"):                       # phase 8: implemented
         m = importlib.import_module(f"shadow.{mod}")
-        assert m.PHASE == ph and m.IMPLEMENTED is False
-        with pytest.raises(NotImplementedError):
-            m.not_ready()
+        assert m.PHASE == 8 and m.IMPLEMENTED is True
+    m = importlib.import_module("shadow.dashboard")
+    assert m.PHASE == 9 and m.IMPLEMENTED is False
+    with pytest.raises(NotImplementedError):
+        m.not_ready()
 
 
 @pytest.mark.network

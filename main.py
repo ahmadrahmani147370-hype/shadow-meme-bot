@@ -1,6 +1,6 @@
 """SHADOW MEME entry point.
 
-    python main.py                  # run the bot (Telegram-controlled; arrives in phase 8)
+    python main.py                  # run the bot (Telegram-controlled; start.sh does this in a restart loop)
     python main.py --debug doctor   # self-check (same as: python -m shadow.doctor)
     python main.py --debug doctor --offline
     python main.py --debug scan [seconds] [fallback]   # live scanner test (phase 2)
@@ -19,6 +19,7 @@ Exit codes: 0 ok, 1 doctor found a FAIL, 2 config error, 3 feature not built yet
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from shadow import __version__
@@ -150,10 +151,25 @@ def main(argv: list[str] | None = None) -> int:
     s = load_settings()
     log = setup_logging(s)
     log.info("SHADOW MEME %s starting (PAPER_ONLY=%s)", __version__, s.paper_only)
-    log.warning("The Telegram bot loop arrives in phase 8. Phase 1 only ships setup + doctor: "
-                "run `python main.py --debug doctor`.")
-    return 3
+    for w in getattr(s, "warnings", ()) or ():
+        log.warning("config: %s", w)
+    if not s.telegram_bot_token or not s.telegram_chat_id:
+        log.error("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID missing in .env - the bot is controlled only through Telegram.")
+        return 2
+    import asyncio
 
+    from shadow.app import App
+    from shadow.db import WriterLocked
+    try:
+        app = App(s)
+    except WriterLocked as e:
+        log.error("STOP: %s", e)
+        return 4
+    secs = float(os.environ.get("SHADOW_RUN_SECONDS") or 0) or None   # testing: stop after N seconds
+    try:
+        return asyncio.run(app.run(seconds=secs))
+    except KeyboardInterrupt:
+        return 0
 
 if __name__ == "__main__":
     sys.exit(main())

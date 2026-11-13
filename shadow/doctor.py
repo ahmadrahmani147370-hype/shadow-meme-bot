@@ -74,9 +74,9 @@ def check_config(s: Settings) -> list[Check]:
     out = [Check("config", "settings", WARN if s.warnings else OK,
                  "; ".join(s.warnings) if s.warnings else "loaded (.env + defaults)")]
     out.append(Check("config", "telegram_token", OK if s.telegram_bot_token else WARN,
-                     "set" if s.telegram_bot_token else "empty (needed from phase 8: nano .env)"))
+                     "set" if s.telegram_bot_token else "empty - REQUIRED: the bot runs only with Telegram (nano .env)"))
     out.append(Check("config", "telegram_chat_id", OK if s.telegram_chat_id else WARN,
-                     "set" if s.telegram_chat_id else "empty (needed from phase 8)"))
+                     "set" if s.telegram_chat_id else "empty - REQUIRED (your own chat id)"))
     return out
 
 
@@ -180,7 +180,7 @@ def _endpoint_for_settings(e: Endpoint, s: Settings) -> Endpoint:
 
 TELEGRAM_HINT = ("Telegram can't be reached from this network (common on some Pakistani mobile networks). "
                  "Try: 1) another network (Wi-Fi / other SIM), 2) the free 1.1.1.1 (Cloudflare WARP) app, "
-                 "3) advanced: TELEGRAM_API_BASE=<your https Bot API mirror> in .env. Needed only from phase 8.")
+                 "3) advanced: TELEGRAM_API_BASE=<your https Bot API mirror> in .env. The bot keeps scanning + paper trading while Telegram is unreachable.")
 
 
 def _classify(e: Endpoint, code: int | None, body: str, err: str = "") -> tuple[str, str]:

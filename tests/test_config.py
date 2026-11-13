@@ -74,8 +74,9 @@ def test_dotenv_file_is_loaded(tmp_path, monkeypatch):
 def test_env_example_is_safe():
     lines = dict(l.split("=", 1) for l in (PROJECT_ROOT / ".env.example").read_text().splitlines()
                  if l and not l.startswith("#"))
-    for secret in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "JUPITER_API_KEY", "RUGCHECK_API_KEY", "BIRDEYE_API_KEY"):
+    for secret in ("TELEGRAM_BOT_TOKEN", "JUPITER_API_KEY", "RUGCHECK_API_KEY", "BIRDEYE_API_KEY"):
         assert lines[secret] == "", f"{secret} must be empty in .env.example"
+    assert lines["TELEGRAM_CHAT_ID"] == "7922990181"          # owner chat id (not a secret; only chat obeyed)
     assert lines["PAPER_ONLY"] == "true"
     assert not any("PRIVATE" in k or "SEED" in k for k in lines)
 

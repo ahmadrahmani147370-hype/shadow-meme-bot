@@ -45,6 +45,11 @@ def _str(env: dict, key: str, default: str = "") -> str:
     return (env.get(key) or default).strip()
 
 
+def _bool(env: dict, key: str, default: bool) -> bool:
+    raw = (env.get(key) or "").strip().lower()
+    return default if raw == "" else raw in ("1", "true", "yes", "on")
+
+
 def _url(env: dict, key: str, default: str, warnings: list) -> str:
     v = _str(env, key, default).rstrip("/")
     if not v.startswith("https://"):
@@ -72,8 +77,18 @@ def _num(env: dict, key: str, default, cast, warnings: list, lo=None, hi=None):
 class Settings:
     # Telegram (phase 8). Commands are accepted only from telegram_chat_id.
     telegram_bot_token: str = ""
-    telegram_chat_id: str = ""
-    telegram_api_base: str = "https://api.telegram.org"  # phase 8; change if api.telegram.org is blocked
+    telegram_chat_id: str = "7922990181"                 # ONLY this chat may control the bot / gets alerts
+    telegram_api_base: str = "https://api.telegram.org"  # change if api.telegram.org is blocked (mirror/proxy)
+    tg_startup_message: bool = True       # "SHADOW MEME online (paper-only)" when the bot starts
+    tg_alerts_dry_run: bool = False       # true = alerts are only logged (testing); command replies still sent
+    tg_hold_alerts: bool = True           # HOLD updates for open watches (rate-limited)
+    tg_sell_cooldown_min: float = 10.0    # max 1 SELL alert per coin+strategy per N minutes
+    tg_hold_cooldown_min: float = 30.0    # max 1 HOLD alert per coin per N minutes
+    tg_reject_digest_min: float = 60.0    # REJECTs are never sent one by one: 1 digest per N minutes (0 = off)
+    tg_max_alerts_per_min: int = 20       # signal alerts above this per minute are summarised, not sent
+    tg_queue_max: int = 300               # outgoing queue while Telegram is unreachable (oldest dropped)
+    tg_poll_timeout_sec: int = 25         # getUpdates long-poll timeout
+    tg_send_interval_sec: float = 1.1     # min gap between messages (Telegram: ~1 msg/s per chat)
 
     # Data sources. All free / keyless by default.
     solana_rpc_url: str = "https://api.mainnet-beta.solana.com"
@@ -255,8 +270,18 @@ def load_settings(env_file: str | Path | None = None, env: dict | None = None) -
 
     s = Settings(
         telegram_bot_token=_str(env, "TELEGRAM_BOT_TOKEN"),
-        telegram_chat_id=_str(env, "TELEGRAM_CHAT_ID"),
+        telegram_chat_id=_str(env, "TELEGRAM_CHAT_ID", Settings.telegram_chat_id),
         telegram_api_base=_url(env, "TELEGRAM_API_BASE", Settings.telegram_api_base, w),
+        tg_startup_message=_bool(env, "TELEGRAM_STARTUP_MESSAGE", True),
+        tg_alerts_dry_run=_bool(env, "TELEGRAM_ALERTS_DRYRUN", False),
+        tg_hold_alerts=_bool(env, "TELEGRAM_HOLD_ALERTS", True),
+        tg_sell_cooldown_min=_num(env, "TELEGRAM_SELL_COOLDOWN_MIN", 10.0, float, w, 0, 1440),
+        tg_hold_cooldown_min=_num(env, "TELEGRAM_HOLD_COOLDOWN_MIN", 30.0, float, w, 0, 1440),
+        tg_reject_digest_min=_num(env, "TELEGRAM_REJECT_DIGEST_MIN", 60.0, float, w, 0, 1440),
+        tg_max_alerts_per_min=_num(env, "TELEGRAM_MAX_ALERTS_PER_MIN", 20, int, w, 1, 600),
+        tg_queue_max=_num(env, "TELEGRAM_QUEUE_MAX", 300, int, w, 10, 10000),
+        tg_poll_timeout_sec=_num(env, "TELEGRAM_POLL_TIMEOUT_SEC", 25, int, w, 0, 50),
+        tg_send_interval_sec=_num(env, "TELEGRAM_SEND_INTERVAL_SEC", 1.1, float, w, 0, 60),
         solana_rpc_url=_str(env, "SOLANA_RPC_URL", Settings.solana_rpc_url),
         solana_rpc_fallback=_str(env, "SOLANA_RPC_FALLBACK", Settings.solana_rpc_fallback),
         pumpportal_ws=_str(env, "PUMPPORTAL_WS", Settings.pumpportal_ws),

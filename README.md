@@ -7,7 +7,7 @@ Solana meme coin scanner + **paper-trading** signal bot in Python, built for **A
 > private key, ever. `PAPER_ONLY` is a constant in the code; `.env` cannot turn it off.
 > Signals are not financial advice, and the bot reports only results it actually measured.
 
-## Status: Phase 7 of 10 ✅ (crash-safe SQLite: backups, retention, CSV export)
+## Status: Phase 8 of 10 ✅ (Telegram control + alerts; `./start.sh` runs everything)
 
 | Phase | What | Status |
 |---|---|---|
@@ -18,8 +18,8 @@ Solana meme coin scanner + **paper-trading** signal bot in Python, built for **A
 | 5 | Signal engine + strategies + judge agent + MCAP / TOP VOLUME universes | ✅ done |
 | 6 | Paper trading engine ($100, $2/trade, quote slippage, fees $0 by default, max 5 open) + self-learning | ✅ done |
 | 7 | SQLite database hardening (crash-safe, bounded size, daily backups, CSV export) | ✅ done |
-| 8 | Telegram commands, alerts, daily report | ⏳ next |
-| 9 | Dashboard (Telegram Mini App on GitHub Pages) + self-improving strategies | ⏳ |
+| 8 | Telegram commands, alerts, daily report | ✅ done |
+| 9 | Dashboard (Telegram Mini App on GitHub Pages) + self-improving strategies | ⏳ next |
 | 10 | Complete testing | ⏳ |
 
 Files for later phases exist as clearly marked stubs (`PHASE = N`, `IMPLEMENTED = False`).
@@ -44,16 +44,17 @@ python -m shadow.doctor
    the safety checker (phase 4): `python main.py --debug safety <mint>` or `python main.py --debug safety-live 300`,
    everything with signals + judge (phase 5): `python main.py --debug signals 600`,
    and paper trading + self-learning (phase 6): `python main.py --debug paper 900` / `python main.py --debug paper report`
-6. From phase 8: `nano .env` (Telegram token + chat id), then `./start.sh`.
+6. `nano .env` (Telegram token; chat id is already 7922990181), then `./start.sh`. Everything else is done from Telegram.
 
-**Telegram bot:** SHADOW MEME will use the existing **@Fathersigna147lBot** with owner chat id
-`7922990181`. It is wired in phase 8. A bot token can only be used by one program at a time, so the
-old FATHER bot must be stopped before SHADOW MEME runs.
+**Telegram bot:** SHADOW MEME uses the existing **@Fathersigna147lBot** with owner chat id
+`7922990181`. A bot token can only be used by one program at a time, so the old FATHER bot must be
+stopped before SHADOW MEME runs (otherwise Telegram answers 409 and the bot logs "another program is
+polling this bot token"; alerts still go out, commands wait).
 
 **If the doctor shows `telegram_api` ConnectTimeout** (seen on a Pakistani mobile network while
 every other check passed): try another network (Wi-Fi or another SIM) or the free **1.1.1.1 (WARP)**
 app. Advanced option: set `TELEGRAM_API_BASE` in `.env` to your own HTTPS Bot API mirror. The
-doctor checks whatever `TELEGRAM_API_BASE` points to; the bot uses it from phase 8.
+doctor and the bot both use whatever `TELEGRAM_API_BASE` points to.
 
 Update later: `cd shadow-meme-bot && git pull && python -m shadow.doctor`
 
@@ -74,11 +75,11 @@ pkg install -y git python && git clone https://github.com/ahmadrahmani147370-hyp
    Signals test (phase 5): `python main.py --debug signals 600` — 10 minute tak sab kuch live: naye coins, $1M+ MCAP coins, TOP VOLUME coins, safety, signals aur judge. Har BUY WATCH ke neeche judge ka faisla (APPROVE / VETO) aur wajah. Aakhir mein har list ke signals, judge ki ginti, API calls aur CPU/RAM. `quiet` likhein to REJECT lines screen par nahi aatin (ginti phir bhi hoti hai).
    Paper trading test (phase 6): `python main.py --debug paper 900` — 15 minute tak sab kuch, aur judge jis BUY WATCH ko APPROVE kare us par $2 ka paper trade (asli paisa nahi). Har trade khulne aur band hone par screen par aata hai, slippage (aur agar .env mein fee ho to fee) ke baad nafa/nuqsan ke saath. `python main.py --debug paper report` — balance, khuli positions, history, aaj ki report aur strategies (bina kuch chalaye, database se).
    Database (phase 7): `python main.py --debug db` — database theek hai ya nahi (integrity), paper account aur trades ka hisaab milta hai ya nahi, har table ka size, backups. `... db backup` abhi backup, `... db export` trades aur rozana report CSV (Excel) mein `data/exports/` mein.
-6. Phase 8 ke baad: `nano .env` mein Telegram token aur chat id likhein, phir `./start.sh`.
+6. `nano .env` mein Telegram token likhein (chat id pehle se 7922990181 hai), phir `./start.sh`. Baaqi sab Telegram se.
 
 Scanner do tarah se coins dhoondta hai: PumpPortal websocket (live) aur GeckoTerminal + RugCheck polling. Test mein websocket ne sirf ~19% naye pump.fun coins diye, is liye polling hamesha on rehti hai. Ek coin dobara nahi aata, restart ke baad bhi nahi.
 
-Agar doctor mein `telegram_api` par **ConnectTimeout** aaye (Pakistan ke kuch networks par Telegram block hota hai): doosra network (Wi-Fi ya doosri SIM) try karein, ya muft **1.1.1.1 (WARP)** app on karein. Advanced: `.env` mein `TELEGRAM_API_BASE` apne HTTPS mirror par set karein. Ye phase 8 se zaroori hoga.
+Agar doctor mein `telegram_api` par **ConnectTimeout** aaye (Pakistan ke kuch networks par Telegram block hota hai): doosra network (Wi-Fi ya doosri SIM) try karein, ya muft **1.1.1.1 (WARP)** app on karein. Advanced: `.env` mein `TELEGRAM_API_BASE` apne HTTPS mirror par set karein. Telegram na chale to bhi bot scanning aur paper trading karta rehta hai; messages line mein intezar karte hain aur Telegram wapas aate hi chale jaate hain.
 
 Telegram ke liye purana **@Fathersigna147lBot** hi use hoga (chat id `7922990181`). Ek token ek waqt mein sirf ek program chala sakta hai, is liye FATHER bot band hona chahiye.
 
@@ -122,7 +123,7 @@ Strategies khud behtar hoti hain, lekin hifazat ke saath: kam az kam 30 band wat
 chuna gaya badlaav naye (na dekhe gaye) data par bhi behtar hona chahiye, ek qadam mein ek setting
 sirf 20% tak, 6 ghante mein ek badlaav, aur naya version kharab nikle to khud purane par wapas. Har
 badlaav, wapsi aur judge ki setting ka badlaav database mein "strategy update" ke taur par likha jaata
-hai (kya badla, kyun, pehle/baad ke nateeje, version) — phase 8 mein ye Telegram par aapko bheja jayega.
+hai (kya badla, kyun, pehle/baad ke nateeje, version) — aur Telegram par aapko "🧠 STRATEGY UPDATE" ke naam se aata hai.
 
 **Database (phase 7) – Roman Urdu:** phone achanak band ho jaye, Termux mar jaye ya battery khatam
 ho — paper balance, khuli positions, strategy versions aur strategy updates sahi rehte hain. Test mein
@@ -438,6 +439,53 @@ python main.py --debug db export [dir]    # CSV files (default data/exports)
   $95.27 = +150,000,000%) was booked as a +$87,637 paper take profit. That test DB was discarded; the
   rug guard above prevents it.
 
+## Telegram control and alerts (phase 8)
+
+`./start.sh` (or `python main.py`) runs everything: scanner, collectors, safety, signals + judge, paper
+trading, self-learning, database maintenance and the Telegram bot. There are no terminal menus.
+Without `TELEGRAM_BOT_TOKEN` the bot exits with code 2 ("config error").
+
+- **Owner only:** only chat `TELEGRAM_CHAT_ID` (default `7922990181`) is obeyed. Messages from any other
+  chat are ignored and counted in `/status`. Commands sent while the bot was off are skipped at start.
+- **Commands:** `/start` `/status` `/scanner` `/newtokens` `/signals` `/paper` `/positions` `/history`
+  `/report` `/strategies` `/pause` `/resume` `/export` `/help`.
+  `/pause` stops NEW paper trades and signal alerts; scanning, data and the SL/TP management of open
+  positions continue, and trade-close alerts, strategy updates and the daily report still arrive. The
+  pause survives restarts. `/export` sends 6 CSV files (trades, daily report, signals, judge,
+  strategy updates, equity; times in PKT).
+- **Alerts:** 🟢 BUY WATCH with the judge verdict (APPROVE / VETO), confidence and reasons, levels,
+  safety and detectors · 🔴 SELL (max 1 per coin+strategy per 10 min) · ⏸️ HOLD (max 1 per coin per
+  30 min) · ⛔ REJECT never one by one, only an hourly digest (count, top reasons, coins, and how many
+  alerts were rate-limited) · 💰 paper OPEN / CLOSE · 🧠 STRATEGY UPDATE for every self-learning change
+  (old → new values, reason, before/after metrics with sample sizes, version) · 📊 daily report at
+  00:00 PKT for the day that just ended. Above `TELEGRAM_MAX_ALERTS_PER_MIN` (20) signal alerts are only
+  counted (they show up in the digest).
+- **Telegram unreachable** (e.g. ConnectTimeout on a Pakistani mobile network): every message waits in
+  a bounded queue (`TELEGRAM_QUEUE_MAX`, oldest alerts dropped first, never strategy updates / daily
+  report / replies); the sender retries with exponential backoff (2 s → 120 s, jitter) and honours
+  429 `retry_after`. Scanning and paper trading never wait for Telegram. Strategy updates are marked
+  as sent only after Telegram accepted them, and the daily report is remembered in the database, so a
+  restart neither loses nor repeats them.
+- **Token safety:** the token is never logged or printed: httpx request logging is switched off and
+  every log line passes a redaction filter; error messages show `<token>` instead.
+- **Settings** (`.env`): `TELEGRAM_API_BASE`, `TELEGRAM_STARTUP_MESSAGE`, `TELEGRAM_ALERTS_DRYRUN`
+  (testing: alerts only logged), `TELEGRAM_HOLD_ALERTS`, `TELEGRAM_SELL_COOLDOWN_MIN`,
+  `TELEGRAM_HOLD_COOLDOWN_MIN`, `TELEGRAM_REJECT_DIGEST_MIN`, `TELEGRAM_MAX_ALERTS_PER_MIN`,
+  `TELEGRAM_QUEUE_MAX`, `TELEGRAM_POLL_TIMEOUT_SEC`, `TELEGRAM_SEND_INTERVAL_SEC`.
+- `start.sh` restarts the bot after a crash (10 s → 300 s backoff) and stops on exit 0 (normal stop),
+  2 (config error) or 4 (another SHADOW MEME already runs on the same database).
+
+**Telegram (phase 8) – Roman Urdu:** `./start.sh` chalayein, bas. Sab kuch Telegram se control hota
+hai, terminal mein koi menu nahi. Bot sirf aapki chat (`7922990181`) ki baat sunta hai, baaqi sab ko
+ignore karta hai. Commands: `/status` (bot ka haal), `/scanner`, `/newtokens` (naye coins),
+`/signals`, `/paper` (balance), `/positions` (khule trades), `/history`, `/report` (aaj ki report),
+`/strategies`, `/pause` (naye paper trades aur signal alerts band, scanning chalti rahe gi),
+`/resume`, `/export` (CSV files Telegram par), `/help`. Alerts: BUY WATCH (judge ka faisla aur wajah
+ke saath), SELL / HOLD (had se zyada nahi), REJECT sirf ghante mein ek dafa khulasa, paper trade
+khulna/band hona, har strategy update (kya badla, purani → nayi value, kyun, pehle/baad ke nateeje
+kitne trades par, version), aur raat 12:00 baje (PKT) rozana report. Telegram band ho to bhi bot
+kaam karta rehta hai aur messages baad mein bhej deta hai. Token kabhi log mein nahi likha jaata.
+
 ## Doctor (self-check)
 
 ```bash
@@ -470,7 +518,7 @@ and Birdeye needs a key, so neither is required.
 ## Project layout
 
 ```
-main.py                 entry point (bot from phase 8; --debug doctor / scan / collect / safety / signals now)
+main.py                 entry point: no args = full bot (Telegram-controlled); --debug tools
 shadow/__init__.py      version + PAPER_ONLY constant
 shadow/config.py        .env loading, safe defaults, paper-only guard
 shadow/doctor.py        self-check
@@ -501,7 +549,9 @@ shadow/db.py            SQLite schema v6 (indexes + meta; single-writer tx() + l
                         strategy_updates, signals.path_json) on top of v4: seen_tokens, token_market, price_snapshots, candles_1m, drops,
                         safety_reports, rugcheck_cache, creator_blacklist, universe_members, universe_runs,
                         signals, judge_verdicts, strategy_params (+ `universe` column: new / mcap / volume)
-shadow/telegram_bot.py  phase 8 stub
+shadow/app.py           phase 8: builds and runs everything (scanner → signals → paper → learning → maintenance → Telegram)
+shadow/telegram_api.py  phase 8: Bot API client (TELEGRAM_API_BASE, backoff on ConnectTimeout, 429 retry_after, token redaction)
+shadow/telegram_bot.py  phase 8: commands, alerts, rate limits, outgoing queue, daily report
 shadow/dashboard.py     phase 9 stub
 tests/                  pytest (config, doctor, scanner, collector, safety, universes, signals, strategies, judge,
                         paper, learning, persistence incl. a real kill -9 test via tests/crash_worker.py;

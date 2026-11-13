@@ -91,6 +91,8 @@ class PaperEngine:
         s, now = self.s, self.clock()
         if row.get("alert_type") != "BUY_WATCH" or row.get("judge_verdict") != "APPROVE":
             return False, "not an approved BUY WATCH"
+        if getattr(self, "paused", False):
+            return False, "paused (/pause)"
         if (row.get("score") or 0) < s.min_trade_score:
             return False, f"score {row.get('score')} < MIN_TRADE_SCORE {s.min_trade_score}"
         q = (report.data.get("quote") if report else None) or {}
