@@ -90,6 +90,8 @@ class Settings:
     tg_poll_timeout_sec: int = 25         # getUpdates long-poll timeout
     tg_send_interval_sec: float = 1.1     # min gap between messages (Telegram: ~1 msg/s per chat)
     tg_menu_button: bool = True           # chat menu button opens the dashboard Mini App
+    tg_log_only: bool = False             # testing: no Telegram network calls at all, sends only written to the log
+    health_log_sec: int = 300             # HEALTH line (RSS, CPU, DB size, API calls/429s, loop lag) every N seconds
 
     # Dashboard (phase 9): Telegram Mini App on GitHub Pages (docs/). Optional GITHUB_TOKEN (fine-grained,
     # this repo only, Contents: read & write) lets the bot push the full snapshot to the dashboard-data branch.
@@ -292,6 +294,8 @@ def load_settings(env_file: str | Path | None = None, env: dict | None = None) -
         tg_poll_timeout_sec=_num(env, "TELEGRAM_POLL_TIMEOUT_SEC", 25, int, w, 0, 50),
         tg_send_interval_sec=_num(env, "TELEGRAM_SEND_INTERVAL_SEC", 1.1, float, w, 0, 60),
         tg_menu_button=_bool(env, "TELEGRAM_MENU_BUTTON", True),
+        tg_log_only=_bool(env, "TELEGRAM_LOG_ONLY", False),
+        health_log_sec=_num(env, "HEALTH_LOG_SEC", 300, int, w, 10, 86400),
         github_token=_str(env, "GITHUB_TOKEN"),
         github_repo=_str(env, "GITHUB_REPO", Settings.github_repo),
         dashboard_url=_url(env, "DASHBOARD_URL", Settings.dashboard_url.rstrip("/"), w) + "/",

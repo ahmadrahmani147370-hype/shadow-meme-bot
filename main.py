@@ -157,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
     log.info("SHADOW MEME %s starting (PAPER_ONLY=%s)", __version__, s.paper_only)
     for w in getattr(s, "warnings", ()) or ():
         log.warning("config: %s", w)
-    if not s.telegram_bot_token or not s.telegram_chat_id:
+    if (not s.telegram_bot_token and not s.tg_log_only) or not s.telegram_chat_id:
         log.error("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID missing in .env - the bot is controlled only through Telegram.")
         return 2
     import asyncio

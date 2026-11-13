@@ -28,7 +28,7 @@ from .paper import PaperEngine
 from .safety import SafetyChecker
 from .scanner import Scanner
 from .signals import SignalEngine, Sources
-from .telegram_api import TelegramAPI
+from .telegram_api import LogOnlyAPI, TelegramAPI
 from .telegram_bot import TelegramBot
 from .universes import UniverseCollector
 
@@ -42,7 +42,7 @@ class App:
         self.db.acquire_writer_lock()            # one bot per DB (WriterLocked otherwise)
         self.started_at = time.time()
         self.stop_event = asyncio.Event()
-        lim = make_limiters()
+        lim = self.limiters = make_limiters()
         self.scanner = Scanner(s, self.db, limiters=lim)
         self.col = Collector(s, self.db, limiters=lim)
         self.uni = (UniverseCollector(s, self.db, limiters=lim, skip_fn=lambda m: m in self.col.tracked)
@@ -58,8 +58,8 @@ class App:
                                 on_signal=self._on_signal)
         self.maint = Maintenance(s, self.db)
         self.bot = None
-        if telegram and s.telegram_bot_token:
-            self.api = api or TelegramAPI(s.telegram_bot_token, s.telegram_api_base)
+        if telegram and (s.telegram_bot_token or s.tg_log_only):
+            self.api = api or (LogOnlyAPI() if s.tg_log_only else TelegramAPI(s.telegram_bot_token, s.telegram_api_base))
             self.bot = TelegramBot(s, self.db, self.api, app=self)
         self.paper.paused = self.paused
         self.learn_runs = 0
@@ -188,9 +188,83 @@ class App:
 
     async def _selftest(self, after: float) -> None:
         await asyncio.sleep(after)
+        if isinstance(self.api, LogOnlyAPI):
+            # full path: injected updates -> poll loop -> handlers -> outgoing queue -> (log-only) send
+            from .telegram_bot import COMMANDS
+            n0, ign0 = len(self.api.sent), self.bot.stats["ignored_foreign"]
+            self.api.inject(12345, "/status")
+            for c in COMMANDS:
+                if c not in ("pause", "resume"):
+                    self.api.inject(self.bot.chat_id, f"/{c}")
+            self.api.inject(self.bot.chat_id, "/pause")
+            self.api.inject(self.bot.chat_id, "/resume")
+            await asyncio.sleep(60)
+            sent = self.api.sent[n0:]
+            log.info("TELEGRAM E2E SELFTEST (log-only): %d commands handled, %d messages/documents out, foreign chat "
+                     "ignored=%s, paused now=%s: %s", self.bot.stats["commands"], len(sent),
+                     self.bot.stats["ignored_foreign"] == ign0 + 1, self.paused,
+                     json.dumps([m for m, _ in sent]))
+            return
         res = await self.bot.selftest()
         ok = sum(1 for v in res.values() if v.get("ok"))
         log.info("TELEGRAM SELFTEST %d/%d ok: %s", ok, len(res), json.dumps(res, ensure_ascii=False))
+
+    def health(self, cpu_prev: tuple | None = None) -> tuple[dict, tuple]:
+        from .net import limiter_stats
+        try:
+            with open("/proc/self/stat") as f:
+                parts = f.read().rsplit(")", 1)[1].split()
+            ticks = os.sysconf("SC_CLK_TCK")
+            cpu_s = (int(parts[11]) + int(parts[12])) / ticks
+            rss_mb = int(parts[21]) * os.sysconf("SC_PAGE_SIZE") / 1e6
+        except (OSError, ValueError, IndexError):
+            import resource
+            ru = resource.getrusage(resource.RUSAGE_SELF)
+            cpu_s, rss_mb = ru.ru_utime + ru.ru_stime, ru.ru_maxrss / 1024
+        now = time.time()
+        cpu_pct = (100 * (cpu_s - cpu_prev[0]) / max(1e-6, now - cpu_prev[1])) if cpu_prev else None
+        size = lambda p: os.path.getsize(p) / 1e6 if os.path.exists(p) else 0.0  # noqa: E731
+        st, e = self.eng.stats, self.paper.equity()
+        d = {"t": round(now - self.started_at), "rss_mb": round(rss_mb, 1),
+             "cpu_pct": None if cpu_pct is None else round(cpu_pct, 1), "cpu_s": round(cpu_s, 1),
+             "db_mb": round(size(self.db.path), 2), "wal_mb": round(size(self.db.path + "-wal"), 2),
+             "tracked": {"new": len(self.col.tracked), "mcap": len(self.uni.members["mcap"]) if self.uni else 0,
+                         "volume": len(self.uni.members["volume"]) if self.uni else 0},
+             "new_tokens": self.scanner.stats.get("new_tokens", 0), "safety_checked": self.chk.stats.get("checked_unique", 0),
+             "signals": {k[6:]: v for k, v in st.items() if k.startswith("alert_")},
+             "judge": {"approve": st["judge_APPROVE"], "veto": st["judge_VETO"]},
+             "paper": {"equity": round(e["equity"], 2), "open": e["n_open"], "opened": self.paper.stats["opened"],
+                       "closed": self.paper.stats["closed"]},
+             "api": limiter_stats(self.limiters), "scanner_errors": len(self.scanner.errors),
+             "ws_mode": self.scanner.mode, "loop_lag_ms": getattr(self, "_lag_ms", None)}
+        if self.bot:
+            d["telegram"] = {"queue": len(self.bot.queue), "sent": self.bot.stats["sent"],
+                             "dropped": self.bot.stats["dropped"], "reachable": self.api.reachable}
+        return d, (cpu_s, now)
+
+    async def _health_loop(self, tasks: list) -> None:
+        prev = self.health()[1]
+        while True:
+            t0 = time.monotonic()
+            await asyncio.sleep(1.0)
+            self._lag_ms = round((time.monotonic() - t0 - 1.0) * 1000, 1)      # event-loop responsiveness
+            await asyncio.sleep(max(1.0, self.s.health_log_sec - 1.0))
+            try:
+                d, prev = self.health(prev)
+                log.info("HEALTH %s", json.dumps(d, separators=(",", ":")))
+            except Exception as e:  # noqa: BLE001
+                log.warning("health snapshot failed: %s", e)
+            dead = [t for t in tasks if t.done() and not t.cancelled() and t.get_name() in self.CORE_TASKS]
+            for t in dead:
+                exc = t.exception()
+                log.error("core task %s stopped (%s) - restarting the bot", t.get_name(),
+                          f"{type(exc).__name__}: {exc}" if exc else "returned")
+            if dead:
+                self.exit_code = 1          # start.sh restarts after a non-zero exit
+                self.request_stop()
+                return
+
+    CORE_TASKS = ("collector", "safety", "signals", "universes", "telegram", "learning", "maintenance", "dashboard")
 
     def request_stop(self) -> None:
         self.stop_event.set()
@@ -213,13 +287,16 @@ class App:
                  asyncio.create_task(self._dashboard_loop(), name="dashboard")]
         if self.uni:
             tasks.append(asyncio.create_task(self.uni.run(), name="universes"))
+        self.exit_code = 0
+        tasks.append(asyncio.create_task(self._health_loop(tasks), name="health"))
         if self.bot:
             tasks.append(asyncio.create_task(self.bot.run(), name="telegram"))
             st_after = float(os.environ.get("TELEGRAM_SELFTEST_AFTER_SEC") or 0)
             if st_after > 0:
                 tasks.append(asyncio.create_task(self._selftest(st_after), name="tg-selftest"))
         log.info("SHADOW MEME running (PAPER ONLY)%s | Telegram %s | paused=%s", f" for {seconds:.0f}s" if seconds else "",
-                 f"chat {self.bot.chat_id}" + (" (alerts dry-run)" if self.bot.dry_run else "") if self.bot else "OFF",
+                 f"chat {self.bot.chat_id}" + (" (alerts dry-run)" if self.bot.dry_run else "")
+                 + (" (LOG-ONLY: no Telegram network calls)" if self.s.tg_log_only else "") if self.bot else "OFF",
                  self.paused)
         try:
             if seconds:
@@ -252,5 +329,5 @@ class App:
                 await self.api.close()
             with contextlib.suppress(Exception):
                 self.db.con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            log.info("stopped cleanly")
-        return 0
+            log.info("stopped cleanly" if not self.exit_code else "stopped after a task failure (exit 1)")
+        return self.exit_code

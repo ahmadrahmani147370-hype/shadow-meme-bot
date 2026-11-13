@@ -171,6 +171,64 @@ class TelegramAPI:
                                files={"document": (filename, content, "text/csv")}, timeout=60)
 
 
+class LogOnlyAPI:
+    """TELEGRAM_LOG_ONLY=true: same interface as TelegramAPI but never touches the network. Sends are written to the
+    log (first line), getUpdates returns updates injected with `inject()` (tests / long runs). Nothing is sent and the
+    real bot token is not polled, so it can not conflict with the bot running on the phone."""
+
+    def __init__(self, sleep=asyncio.sleep):
+        self._sleep = sleep
+        self.reachable, self.fail_streak, self.last_error, self.last_ok_ts = True, 0, "", time.time()
+        self.calls = self.errors = self.retries = self.rate_limited = 0
+        self.pending: list[dict] = []
+        self.sent: list[tuple[str, str]] = []
+        self._uid = 1000
+
+    def redact(self, text: str) -> str:
+        return str(text)
+
+    def backoff(self, attempt: int) -> float:
+        return min(2.0 * (2 ** attempt), 120.0)
+
+    def inject(self, chat_id, text: str) -> None:
+        self._uid += 1
+        self.pending.append({"update_id": self._uid, "message": {"chat": {"id": int(chat_id)}, "text": text,
+                                                                  "date": int(time.time())}})
+
+    def _log(self, method: str, text: str) -> dict:
+        self.calls += 1
+        first = (text or "").splitlines()[0][:120] if text else ""
+        self.sent.append((method, first))
+        del self.sent[:-2000]
+        log.info("[log-only %s] %s", method, first)
+        return {"message_id": self.calls}
+
+    async def get_me(self) -> dict:
+        return {"username": "log-only"}
+
+    async def get_updates(self, offset: int | None = None, timeout: int = 25) -> list:
+        self.calls += 1
+        if offset is not None and offset < 0:          # backlog skip at start: nothing old
+            return []
+        if not self.pending:
+            await self._sleep(min(timeout, 5) or 0.2)
+        ups, self.pending = [u for u in self.pending if offset is None or u["update_id"] >= offset], []
+        return ups
+
+    async def send_message(self, chat_id, text: str, retries=None, reply_markup=None) -> list[dict]:
+        return [self._log("sendMessage" + ("+button" if reply_markup else ""), text)]
+
+    async def send_document(self, chat_id, filename: str, content: bytes, caption: str = "") -> dict:
+        return self._log("sendDocument", f"{filename} ({len(content)} bytes)")
+
+    async def set_menu_button(self, chat_id, text: str, url: str) -> bool:
+        self._log("setChatMenuButton", f"{text} -> {url[:60]}… ({len(url)} chars)")
+        return True
+
+    async def close(self) -> None:
+        return None
+
+
 def split_text(text: str, limit: int = MAX_TEXT) -> list[str]:
     """Split on line breaks into Telegram-sized parts (4096 chars)."""
     text = text or "-"
@@ -194,4 +252,4 @@ def split_text(text: str, limit: int = MAX_TEXT) -> list[str]:
     return parts
 
 
-__all__ = ["TelegramAPI", "TelegramError", "split_text", "MAX_TEXT"]
+__all__ = ["TelegramAPI", "LogOnlyAPI", "TelegramError", "split_text", "MAX_TEXT"]
