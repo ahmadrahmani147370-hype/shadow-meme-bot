@@ -6,7 +6,7 @@ from shadow import config as shadow_config
 
 LEGACY = {"TRADE_MIN_MCAP_USD": "0", "EVAL_MIN_MCAP_USD": "0", "TRADE_MIN_LIQ_USD": "0", "TRADE_MIN_LIQ_MCAP": "0",
           "TRADE_MIN_AGE_MIN": "0", "COINS_PER_DAY": "0", "TELEGRAM_NOTIFY": "all", "MIN_TRADE_SCORE": "65",
-          "SHADOW_TRACK": "false"}
+          "SHADOW_TRACK": "false", "EXIT_POLICY": "classic"}
 shadow_config.TEST_DEFAULTS = dict(LEGACY)       # module-level Settings built at import time are legacy too
 
 

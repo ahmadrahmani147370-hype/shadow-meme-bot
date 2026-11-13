@@ -43,6 +43,10 @@ def archive_and_reset(db: Database, balance: float = 100.0, *, archive_dir: str 
         c.execute(f"CREATE TABLE IF NOT EXISTS paper_archive_positions (era TEXT NOT NULL, archived_ts REAL NOT NULL, "
                   f"{', '.join(pcols)})")
         c.execute(f"CREATE TABLE IF NOT EXISTS paper_archive_equity (era TEXT NOT NULL, {', '.join(ecols)})")
+        have = set(_cols(db, "paper_archive_positions"))        # schema grew (e.g. v1.1.2 partial_*): add columns
+        for col in pcols:
+            if col not in have:
+                c.execute(f"ALTER TABLE paper_archive_positions ADD COLUMN {col}")
         c.execute("CREATE TABLE IF NOT EXISTS paper_resets (id INTEGER PRIMARY KEY, ts REAL NOT NULL, era TEXT NOT NULL, "
                   "old_start_balance REAL, old_cash REAL, old_realized_pnl REAL, n_trades INTEGER, n_wins INTEGER, "
                   "n_closed_at_reset INTEGER, new_balance REAL NOT NULL, backup_path TEXT, account_json TEXT)")
@@ -51,7 +55,8 @@ def archive_and_reset(db: Database, balance: float = 100.0, *, archive_dir: str 
         for p in c.execute("SELECT * FROM paper_positions WHERE status='open'").fetchall():
             p = dict(p)
             px = p["last_price"] or p["entry_price"] or 0.0
-            proceeds = (p["qty"] or 0.0) * px
+            rest = (p["qty"] or 0.0) * px
+            proceeds = rest + (p.get("partial_proceeds") or 0.0)      # a v1.1.2 partial sale was credited already
             pnl = proceeds - (p["size_usd"] or 0.0) - (p["buy_fee"] or 0.0)
             c.execute("UPDATE paper_positions SET status='closed', exit_ts=?, exit_market_price=?, exit_price=?, "
                       "sell_fee=0, exit_slippage_pct=0, exit_reason='reset_archived', proceeds=?, pnl_usd=?, pnl_pct=? "
@@ -59,7 +64,7 @@ def archive_and_reset(db: Database, balance: float = 100.0, *, archive_dir: str 
                                      pnl / p["size_usd"] * 100 if p["size_usd"] else 0.0, p["id"]))
             if acc:
                 c.execute("UPDATE paper_account SET cash=cash+?, realized_pnl=realized_pnl+?, updated_ts=? WHERE id=1",
-                          (proceeds, pnl, now))
+                          (rest, proceeds - (p["size_usd"] or 0.0), now))
             n_open += 1
         acc = dict(c.execute("SELECT * FROM paper_account WHERE id=1").fetchone() or {}) or None
         n, wins = c.execute("SELECT COUNT(*), COALESCE(SUM(pnl_usd > 0), 0) FROM paper_positions "

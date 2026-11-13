@@ -24,6 +24,7 @@ import time
 from collections import Counter, deque
 from dataclasses import asdict, dataclass, field
 
+from .exits import ExitPolicy
 from .pricing import drained, implausible_jump, rug_pnl_pct
 from .config import Settings
 from .db import Database
@@ -337,6 +338,7 @@ class SignalEngine:
         self.paper = paper                              # phase 6 PaperEngine (opens trades on APPROVED watches)
         self.paths: dict[int, dict] = {}                # price path after each BUY WATCH (self-learning input)
         self.strategies: dict[str, Strategy] = load_strategies(db)
+        self.policy = ExitPolicy.from_settings(settings)
         self.proximity: dict[str, tuple[float, float]] = {}
         self.last_signal: dict[tuple, float] = {}
         self.pending: dict[tuple, float] = {}           # waiting for a fresh quote since ts
@@ -363,13 +365,20 @@ class SignalEngine:
                                   "ts": r["ts"], "max_up": r["max_up_pct"] or 0.0, "max_down": r["max_down_pct"] or 0.0,
                                   "last_hold": r["ts"], "approved": r["judge_verdict"] == "APPROVE",
                                   "shadow": r["alert_type"] == SHADOW,
-                                  "symbol": r["symbol"] or "", "creator": seen.get("creator")}
+                                  "symbol": r["symbol"] or "", "creator": seen.get("creator"),
+                                  # v1.1.2 run policy state, rebuilt from the stored max gain
+                                  "partial": bool(self.policy.partial_frac and (r["max_up_pct"] or 0) >= self.policy.partial_pct),
+                                  "banked": 0.0}
+            if self.open[r["id"]]["partial"]:
+                o = self.open[r["id"]]
+                o["banked"] = self.policy.partial_frac * self.policy.partial_pct
             self._start_path(r["id"], r["mint"], r["entry"], r["ts"], r["time_stop_min"] or 30,
                              json.loads(r.get("path_json") or "[]"))
             self.stats["reloaded_open"] += 1
 
     def _start_path(self, sid: int, mint: str, entry: float, ts: float, time_stop_min: float, pts=None) -> None:
-        horizon = max(60.0, 2.0 * float(time_stop_min)) * 60     # follow past the exit: learning can test longer stops
+        horizon = max(240.0 if self.policy.run else 60.0, 2.0 * float(time_stop_min)) * 60  # follow past the exit
+        # (learning can test longer stops; v1.1.2 winners may run for hours)
         self.paths[sid] = {"mint": mint, "ts": ts, "entry": entry, "until": ts + horizon, "pts": list(pts or []),
                            "last": 0.0, "seen": self.clock()}
 
@@ -638,7 +647,11 @@ class SignalEngine:
             chg = (price / o["entry"] - 1) * 100
             o["max_up"], o["max_down"] = max(o["max_up"], chg), min(o["max_down"], chg)
             reason = None
-            if price <= o["sl"]:
+            if self.policy.run:
+                reason = self._run_exit(o, price, ev, now)
+                if reason == "partial":
+                    continue
+            elif price <= o["sl"]:
                 reason = "stop_loss"
             elif price >= o["tp"]:
                 reason = "take_profit"
@@ -656,9 +669,27 @@ class SignalEngine:
                 self._emit(self._row(ev, st, HOLD, f"open {chg:+.1f}% (max +{o['max_up']:.1f}% / {o['max_down']:.1f}%)",
                                      parent_id=sid))
 
+    def _run_exit(self, o: dict, price: float, ev, now: float) -> str | None:
+        """v1.1.2 run policy for a watch (same rules as the paper engine). 'partial' books the partial sale."""
+        pol = self.policy
+        peak = o["entry"] * (1 + o["max_up"] / 100)
+        r = pol.decide(o["entry"], price, peak, o["sl"], o["tp"], now - o["ts"], o["time_stop_min"], o.get("partial", False))
+        if r == "partial":
+            o["partial"], o["banked"] = True, pol.partial_frac * (price / o["entry"] - 1) * 100
+            self.stats["watch_partials"] += 1
+            return "partial"
+        if r is None and ev is not None and not pol.protected(o["entry"], peak):
+            if ev.detections["sudden_dump"].fired:
+                r = "dump_warning"
+            elif ev.detections["pump_exhaustion"].fired and ev.detections["pump_exhaustion"].strength >= 0.5:
+                r = "exhaustion"
+        return r
+
     def _close(self, o: dict, price: float | None, reason: str, ev: Evaluation | None) -> None:
         self.open.pop(o["id"], None)
         pnl = (price / o["entry"] - 1) * 100 if price else None
+        if pnl is not None and o.get("partial"):        # v1.1.2: blended outcome of the partial sale + the rest
+            pnl = o.get("banked", 0.0) + (1 - self.policy.partial_frac) * pnl
         now = self.clock()
         self.db.update_signal(o["id"], status="closed", exit_ts=now, exit_price=price, exit_reason=reason, pnl_pct=pnl,
                               max_up_pct=o["max_up"], max_down_pct=o["max_down"])

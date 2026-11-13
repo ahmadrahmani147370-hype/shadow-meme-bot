@@ -263,6 +263,15 @@ class Settings:
     fast_max_mints: int = 30              # one DexScreener batch call per tick (30 mints max per call)
     fast_near_sec: int = 120              # a coin with a strategy setup stays in the fast set this long
     fast_jup_sec: float = 5.0             # v1.1: Jupiter price v3 for open positions/watches every N s (0 = off)
+    # v1.1.2 exit policy (shadow/exits.py): let winners run, protect the profit
+    exit_policy: str = "run"              # run | classic (v1.1 per-strategy TP / trail / time stop)
+    exit_tp_pct: float = 1000.0
+    exit_be_trigger_pct: float = 15.0
+    exit_be_lock_pct: float = 2.0
+    exit_trail_tiers: str = "50:10,100:15,300:25,inf:30"
+    exit_partial_pct: float = 30.0
+    exit_partial_frac: float = 0.5
+    exit_max_hold_h: float = 24.0
     learn_rollback_margin_pct: float = 0.0  # new version worse than the old one on the same samples -> rollback
     judge_tuning_enabled: bool = True
     universe_backfill_sec: int = 60       # one GeckoTerminal OHLCV backfill per minute for universe members
@@ -473,6 +482,14 @@ def load_settings(env_file: str | Path | None = None, env: dict | None = None) -
         fast_max_mints=_num(env, "FAST_MAX_MINTS", 30, int, w, 1, 30),
         fast_near_sec=_num(env, "FAST_NEAR_SEC", 120, int, w, 0, 86400),
         fast_jup_sec=_num(env, "FAST_JUP_SEC", 5.0, float, w, 0, 600),
+        exit_policy=("classic" if _str(env, "EXIT_POLICY", "run").lower() == "classic" else "run"),
+        exit_tp_pct=_num(env, "EXIT_TP_PCT", 1000.0, float, w, 50, 100000),
+        exit_be_trigger_pct=_num(env, "EXIT_BE_TRIGGER_PCT", 15.0, float, w, 1, 1000),
+        exit_be_lock_pct=_num(env, "EXIT_BE_LOCK_PCT", 2.0, float, w, 0, 100),
+        exit_trail_tiers=_str(env, "EXIT_TRAIL_TIERS", "50:10,100:15,300:25,inf:30"),
+        exit_partial_pct=_num(env, "EXIT_PARTIAL_PCT", 30.0, float, w, 1, 10000),
+        exit_partial_frac=_num(env, "EXIT_PARTIAL_FRAC", 0.5, float, w, 0, 0.9),
+        exit_max_hold_h=_num(env, "EXIT_MAX_HOLD_H", 24.0, float, w, 0, 720),
         learn_rollback_margin_pct=_num(env, "LEARN_ROLLBACK_MARGIN_PCT", 0.0, float, w, 0, 100),
         judge_tuning_enabled=_str(env, "JUDGE_TUNING_ENABLED", "true").lower() in ("1", "true", "yes", "on"),
         universe_backfill_sec=_num(env, "UNIVERSE_BACKFILL_SEC", 60, int, w, 15, 86400),

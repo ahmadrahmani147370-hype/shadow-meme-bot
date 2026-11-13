@@ -21,6 +21,7 @@ from collections import Counter, deque
 from . import PAPER_ONLY
 from .config import Settings
 from .db import Database
+from .exits import ExitPolicy
 from .pricing import amm_out, capped_value, drained, implausible_jump
 from .timeutil import day_start as _tz_day_start
 
@@ -48,6 +49,7 @@ class PaperEngine:
         self.errors: deque = deque(maxlen=50)
         self._last_equity = 0.0
         self._last_fetch = 0.0
+        self.policy = ExitPolicy.from_settings(settings)   # v1.1.2 exits (run = let winners run)
         self._manage_lock = asyncio.Lock()
         self.fast_prices: dict[str, tuple] = {}  # v1.1 FastPricer: mint -> (price, liquidity, source, ts)     # v1.1: the 1 s fast tick and the normal step both call manage()
         self.account()
@@ -158,6 +160,30 @@ class PaperEngine:
             return max(float(q.get("impact_pct") or 0.0), self.s.paper_min_slippage_pct)
         return self.s.paper_slippage_pct
 
+    def partial(self, pos: dict, market_price: float, liquidity_usd: float | None = None) -> dict | None:
+        """v1.1.2: sell EXIT_PARTIAL_FRAC of the position once (at +EXIT_PARTIAL_PCT); the rest rides with the
+        stop at breakeven or better. Cash is credited now; the P&L is booked when the rest closes."""
+        s, now = self.s, self.clock()
+        if pos.get("partial_ts") is not None or not pos["qty"] or self.policy.partial_frac <= 0:
+            return None
+        slip = self._exit_slippage(pos["mint"], now)
+        sell_qty = pos["qty"] * self.policy.partial_frac
+        proceeds = capped_value(sell_qty * market_price * (1 - slip / 100), liquidity_usd)
+        with self.db.tx():
+            cur = self.db.con.execute(
+                "UPDATE paper_positions SET qty=qty-?, partial_ts=?, partial_qty=?, partial_price=?, partial_proceeds=? "
+                "WHERE id=? AND status='open' AND partial_ts IS NULL",
+                (sell_qty, now, sell_qty, proceeds / sell_qty, proceeds, pos["id"]))
+            if cur.rowcount == 1:
+                self._cash_add(proceeds)
+        if cur.rowcount != 1:
+            return None
+        self.stats["partials"] += 1
+        out = self.get(pos["id"])
+        if self.on_trade:
+            self.on_trade("PARTIAL", out)
+        return out
+
     def close(self, pos: dict, market_price: float | None, reason: str, liquidity_usd: float | None = None) -> dict:
         s, now = self.s, self.clock()
         market_price = market_price or pos["last_price"] or pos["market_price"]
@@ -169,6 +195,8 @@ class PaperEngine:
             proceeds = capped_value(pos["qty"] * exit_price, liquidity_usd)  # can't sell more than the pool holds
         if pos["qty"]:
             exit_price = proceeds / pos["qty"]
+        rest = proceeds                                   # cash still to come in (the partial was credited earlier)
+        proceeds = rest + (pos.get("partial_proceeds") or 0.0)    # total sale value of the whole position
         # P&L includes both fees; the buy fee was already booked at open, so only proceeds - size - sell fee here
         pnl = proceeds - pos["size_usd"] - pos["buy_fee"] - s.paper_sell_fee
         with self.db.tx():
@@ -179,7 +207,7 @@ class PaperEngine:
                  pnl / pos["size_usd"] * 100, pos["id"]))
             # credit cash only if this call really closed it (no double credit), in the same transaction
             if cur.rowcount == 1:
-                self._cash_add(proceeds - s.paper_sell_fee, fee=s.paper_sell_fee,
+                self._cash_add(rest - s.paper_sell_fee, fee=s.paper_sell_fee,
                                pnl=proceeds - pos["size_usd"] - s.paper_sell_fee)
         self.stats["closed"] += 1
         self.stats[f"exit_{reason}"] += 1
@@ -191,6 +219,9 @@ class PaperEngine:
     def close_by_signal(self, signal_id: int, reason: str) -> dict | None:
         for p in self.open_positions():
             if p["signal_id"] == signal_id:
+                if self.policy.run and self.policy.protected(p["market_price"], p["peak_price"] or p["market_price"]):
+                    self.stats["sell_signal_ignored_protected"] += 1   # winners: the trailing stop decides
+                    return None
                 md = self.src.get_market(p["mint"]) if self.src else None
                 price = md.price_usd if md and md.price_usd else None
                 if implausible_jump(p["last_price"] or p["market_price"], price, self.s.paper_max_price_jump):
@@ -200,6 +231,10 @@ class PaperEngine:
         return None
 
     def exit_reason(self, p: dict, price: float, now: float) -> str | None:
+        if self.policy.run:
+            peak = max(p["peak_price"] or price, price)
+            return self.policy.decide(p["market_price"], price, peak, p["sl"], p["tp"], now - p["open_ts"],
+                                      p["time_stop_min"], p.get("partial_ts") is not None)
         if p["sl"] and price <= p["sl"]:
             return "stop_loss"
         if p["tp"] and price >= p["tp"]:
@@ -286,6 +321,9 @@ class PaperEngine:
                                     "max_up_pct=MAX(COALESCE(max_up_pct,0),?), max_down_pct=MIN(COALESCE(max_down_pct,0),?)"
                                     " WHERE id=?", (price, now, peak, chg, chg, p["id"]))
             p.update(last_price=price, peak_price=peak)
+            if reason == "partial":
+                self.partial(p, price, liquidity_usd=liq)
+                continue
             if reason:
                 self.close(p, price, reason, liquidity_usd=liq)
                 closed += 1

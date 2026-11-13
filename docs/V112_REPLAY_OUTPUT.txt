@@ -1,0 +1,34 @@
+
+=== ALL: 119 setups (strategies {'momentum_breakout': 60, 'early_entry': 58, 'first_pullback': 1})
+v1.1 current (per-strategy TP/trail/time)      ALL(open marked) n=119 win= 56.3% avg=  -0.74% sum=   -87.7 | open@end n=13 avg=  10.3% | closed n=106 win=52.8% avg= -2.09% best=  30.0%
+TP1000 BE@25(+2) trail 25/30/35                ALL(open marked) n=119 win= 39.5% avg=  -7.58% sum=  -902.1 | open@end n=38 avg=  40.5% | closed n=81 win=14.8% avg=-30.14% best= 131.5%
+TP1000 BE@20(+2) trail 25/30/35                ALL(open marked) n=119 win= 40.3% avg=  -7.55% sum=  -899.0 | open@end n=38 avg=  40.5% | closed n=81 win=16.0% avg=-30.10% best= 131.5%
+TP1000 BE@30(+2) trail 25/30/35                ALL(open marked) n=119 win= 39.5% avg=  -7.50% sum=  -892.3 | open@end n=39 avg=  39.8% | closed n=80 win=13.8% avg=-30.54% best= 131.5%
+TP1000 BE@25(+2) trail 20/25/30                ALL(open marked) n=119 win= 39.5% avg=  -6.95% sum=  -827.2 | open@end n=36 avg=  39.6% | closed n=83 win=16.9% avg=-27.15% best= 131.5%
+TP1000 BE@25(+2) trail 30/35/40                ALL(open marked) n=119 win= 39.5% avg=  -7.95% sum=  -945.7 | open@end n=38 avg=  40.5% | closed n=81 win=14.8% avg=-30.68% best= 131.5%
+TP1000 BE@25(+2) trail 15/20/25                ALL(open marked) n=119 win= 40.3% avg=  -5.24% sum=  -623.4 | open@end n=36 avg=  39.6% | closed n=83 win=18.1% avg=-24.70% best= 144.9%
+TP1000 BE@15(+2) trail 15/25/30                ALL(open marked) n=119 win= 44.5% avg=  -4.38% sum=  -521.0 | open@end n=35 avg=  40.7% | closed n=84 win=25.0% avg=-23.18% best= 131.5%
+TP1000 no BE, trail 25/30/35 from +25          ALL(open marked) n=119 win= 37.8% avg=  -7.67% sum=  -912.9 | open@end n=38 avg=  40.5% | closed n=81 win=12.3% avg=-30.27% best= 131.5%
+TP1000 50%@+30 then BE, trail 25/30/35         ALL(open marked) n=119 win= 40.3% avg=  -4.19% sum=  -498.1 | open@end n=38 avg=  30.1% | closed n=81 win=16.0% avg=-20.27% best=  80.7%
+TP1000 50%@+100 then BE, trail 25/30/35        ALL(open marked) n=119 win= 42.9% avg=  -4.29% sum=  -510.0 | open@end n=38 avg=  40.7% | closed n=81 win=19.8% avg=-25.41% best= 115.7%
+TP1000 BE@15 trail 10/15/25/30 (tiers 50/100/300) ALL(open marked) n=119 win= 47.9% avg=  -2.87% sum=  -341.5 | open@end n=29 avg=  37.6% | closed n=90 win=34.4% avg=-15.92% best= 131.5%
+TP1000 50%@+30, BE@15, trail 10/15/25/30       ALL(open marked) n=119 win= 47.9% avg=  -1.59% sum=  -188.9 | open@end n=29 avg=  27.9% | closed n=90 win=34.4% avg=-11.09% best=  80.7%
+TP1000 50%@+30, BE@15, trail 15/20/25/30       ALL(open marked) n=119 win= 45.4% avg=  -2.14% sum=  -254.7 | open@end n=35 avg=  30.2% | closed n=84 win=26.2% avg=-15.62% best=  80.7%
+TP1000 50%@+30, BE@15, trail 15/25/30/35       ALL(open marked) n=119 win= 45.4% avg=  -2.35% sum=  -279.9 | open@end n=37 avg=  30.9% | closed n=82 win=24.4% avg=-17.36% best=  80.7%
+
+=== >=1M+gates: 7 setups (strategies {'momentum_breakout': 6, 'early_entry': 1})
+v1.1 current (per-strategy TP/trail/time)      ALL(open marked) n=7 win= 57.1% avg=   1.39% sum=     9.7 | open@end n=2 avg=   2.9% | closed n=5 win=60.0% avg=  0.78% best=  12.0%
+TP1000 BE@25(+2) trail 25/30/35                ALL(open marked) n=7 win= 42.9% avg=   0.38% sum=     2.7 | open@end n=3 avg=   1.9% | closed n=4 win=50.0% avg= -0.77% best=   8.4%
+TP1000 BE@20(+2) trail 25/30/35                ALL(open marked) n=7 win= 42.9% avg=   0.38% sum=     2.7 | open@end n=3 avg=   1.9% | closed n=4 win=50.0% avg= -0.77% best=   8.4%
+TP1000 BE@30(+2) trail 25/30/35                ALL(open marked) n=7 win= 42.9% avg=   0.38% sum=     2.7 | open@end n=3 avg=   1.9% | closed n=4 win=50.0% avg= -0.77% best=   8.4%
+TP1000 BE@25(+2) trail 20/25/30                ALL(open marked) n=7 win= 42.9% avg=   0.38% sum=     2.7 | open@end n=3 avg=   1.9% | closed n=4 win=50.0% avg= -0.77% best=   8.4%
+TP1000 BE@25(+2) trail 30/35/40                ALL(open marked) n=7 win= 42.9% avg=   0.38% sum=     2.7 | open@end n=3 avg=   1.9% | closed n=4 win=50.0% avg= -0.77% best=   8.4%
+TP1000 BE@25(+2) trail 15/20/25                ALL(open marked) n=7 win= 42.9% avg=   0.38% sum=     2.7 | open@end n=3 avg=   1.9% | closed n=4 win=50.0% avg= -0.77% best=   8.4%
+TP1000 BE@15(+2) trail 15/25/30                ALL(open marked) n=7 win= 42.9% avg=   0.38% sum=     2.7 | open@end n=3 avg=   1.9% | closed n=4 win=50.0% avg= -0.77% best=   8.4%
+TP1000 no BE, trail 25/30/35 from +25          ALL(open marked) n=7 win= 42.9% avg=   0.38% sum=     2.7 | open@end n=3 avg=   1.9% | closed n=4 win=50.0% avg= -0.77% best=   8.4%
+TP1000 50%@+30 then BE, trail 25/30/35         ALL(open marked) n=7 win= 42.9% avg=   0.38% sum=     2.7 | open@end n=3 avg=   1.9% | closed n=4 win=50.0% avg= -0.77% best=   8.4%
+TP1000 50%@+100 then BE, trail 25/30/35        ALL(open marked) n=7 win= 42.9% avg=   0.38% sum=     2.7 | open@end n=3 avg=   1.9% | closed n=4 win=50.0% avg= -0.77% best=   8.4%
+TP1000 BE@15 trail 10/15/25/30 (tiers 50/100/300) ALL(open marked) n=7 win= 42.9% avg=   0.38% sum=     2.7 | open@end n=3 avg=   1.9% | closed n=4 win=50.0% avg= -0.77% best=   8.4%
+TP1000 50%@+30, BE@15, trail 10/15/25/30       ALL(open marked) n=7 win= 42.9% avg=   0.38% sum=     2.7 | open@end n=3 avg=   1.9% | closed n=4 win=50.0% avg= -0.77% best=   8.4%
+TP1000 50%@+30, BE@15, trail 15/20/25/30       ALL(open marked) n=7 win= 42.9% avg=   0.38% sum=     2.7 | open@end n=3 avg=   1.9% | closed n=4 win=50.0% avg= -0.77% best=   8.4%
+TP1000 50%@+30, BE@15, trail 15/25/30/35       ALL(open marked) n=7 win= 42.9% avg=   0.38% sum=     2.7 | open@end n=3 avg=   1.9% | closed n=4 win=50.0% avg= -0.77% best=   8.4%

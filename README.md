@@ -7,7 +7,7 @@ Solana meme coin scanner + **paper-trading** signal bot in Python, built for **A
 > private key, ever. `PAPER_ONLY` is a constant in the code; `.env` cannot turn it off.
 > Signals are not financial advice, and the bot reports only results it actually measured.
 
-## Status: v1.1.1 ✅ all 10 phases done + v1.1 accuracy update ([what changed](#v11---accuracy-update-13-nov-2026), [v1.1.1](#v111---13-nov-2026), [evidence](docs/V11_ANALYSIS.md), [v1.0 test report](docs/TEST_REPORT.md))
+## Status: v1.1.2 ✅ all 10 phases done + v1.1 accuracy update ([what changed](#v11---accuracy-update-13-nov-2026), [v1.1.1](#v111---13-nov-2026), [v1.1.2 exits](#v112---let-winners-run-13-nov-2026), [evidence](docs/V11_ANALYSIS.md), [v1.0 test report](docs/TEST_REPORT.md))
 
 | Phase | What | Status |
 |---|---|---|
@@ -226,6 +226,23 @@ whenever a shell opens, so the bot restarts after a box restart as soon as any t
   `HEALTH` log (`pace`) show today's count, target, floor and the end-of-day projection.
 * `tools/box_run.sh` keeps `GH_TOKEN` from the starting shell for the dashboard upload, or uses a stored
   `gh auth login` credential when there is one.
+
+## v1.1.2 - let winners run (13 Nov 2026)
+
+*"Entry lo aur bas jo profit me chale chalne do 1000% / profit rakho."* Full details and replay: [docs/V112_EXITS.md](docs/V112_EXITS.md).
+
+Exit rules now (all strategies, `EXIT_POLICY=run`):
+* **Take profit +1000%**. The old 10-35% TP caps are gone, and self-learning can't lower the TP below 1000%.
+* **Stop loss** on losing trades is unchanged, and so is the **rug guard**.
+* **Profit protected** from a +15% peak: the stop moves to at least entry +2%, and a trailing stop follows the peak.
+  It is **10%** below the peak while the gain is under +50%, **15%** up to +100%, **25%** up to +300%, and **30%** above.
+* **Partial profit:** 50% is sold once at +30% ("🟡 SELL 50% (partial profit)"); the rest rides.
+* **Time stop** applies only to trades that never reached +15%. Protected trades can be held up to 24 h.
+* The **SELL** message shows the **peak % reached**, any partial, and the total P&L. `/status` lists the exit rules.
+
+Honest replay (119 recorded setups): classic exits averaged -0.74%/trade and this policy -1.59%. It is the best
+of the let-it-run variants (Ahmed's 25/30/35 example averaged -7.6%). No recorded coin went above about +145%,
+so the 1000% upside could not be tested. Rollback: `EXIT_POLICY=classic`.
 
 ## Token scanner (phase 2)
 

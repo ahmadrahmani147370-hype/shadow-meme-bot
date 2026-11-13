@@ -45,7 +45,8 @@ def consistency(db: Database) -> dict:
     else:
         r = con.execute(
             "SELECT COALESCE(SUM(size_usd + buy_fee), 0) AS spent, "
-            "COALESCE(SUM(CASE WHEN status='closed' THEN proceeds - sell_fee END), 0) AS back, "
+            "COALESCE(SUM(CASE WHEN status='closed' THEN proceeds - sell_fee "
+            "ELSE COALESCE(partial_proceeds, 0) END), 0) AS back, "
             "COALESCE(SUM(buy_fee), 0) AS bfees, COALESCE(SUM(CASE WHEN status='closed' THEN sell_fee END), 0) AS sfees, "
             "COALESCE(SUM(CASE WHEN status='closed' THEN proceeds - size_usd - sell_fee END), 0) AS closed_gain, "
             "SUM(status='open') AS n_open, SUM(status='closed') AS n_closed FROM paper_positions").fetchone()

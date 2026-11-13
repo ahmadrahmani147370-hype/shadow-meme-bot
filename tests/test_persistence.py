@@ -58,7 +58,7 @@ def test_wal_busy_timeout_autocommit(tmp_path):
     assert db.con.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
     assert db.con.execute("PRAGMA busy_timeout").fetchone()[0] == 7000
     assert db.con.execute("PRAGMA synchronous").fetchone()[0] == 1  # NORMAL
-    assert db.con.isolation_level is None and db.version == SCHEMA_VERSION == 6
+    assert db.con.isolation_level is None and db.version == SCHEMA_VERSION == 7
 
 
 def test_tx_is_reentrant_and_rolls_back_everything(tmp_path):
@@ -400,7 +400,7 @@ def test_v5_database_upgrades_to_v6_keeping_data(tmp_path):
     con.commit()
     con.close()
     db = Database(path)
-    assert db.version == 6 and db.con.execute("SELECT cash FROM paper_account").fetchone()[0] == 97.5
+    assert db.version == 7 and db.con.execute("SELECT cash FROM paper_account").fetchone()[0] == 97.5
     idx = {r[0] for r in db.con.execute("SELECT name FROM sqlite_master WHERE type='index'")}
     assert {"idx_paper_open_ts", "idx_paper_closed", "idx_signals_ts", "idx_updates_target"} <= idx
 

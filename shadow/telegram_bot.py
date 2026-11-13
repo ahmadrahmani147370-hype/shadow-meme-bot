@@ -21,6 +21,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 
+from .exits import ExitPolicy
 from . import reports
 from .config import Settings
 from .db import Database
@@ -107,7 +108,7 @@ def buy_watch_text(row: dict, verdict=None) -> str:
     return "\n".join(lines)
 
 
-def buy_text(pos: dict, row: dict | None = None, verdict=None) -> str:
+def buy_text(pos: dict, row: dict | None = None, verdict=None, plan: str | None = None) -> str:
     """v1.1 buy-only mode: the single pushed message - a paper BUY that really opened."""
     sym = pos.get("symbol") or _short(pos["mint"])
     e = pos.get("entry_price")
@@ -120,25 +121,76 @@ def buy_text(pos: dict, row: dict | None = None, verdict=None) -> str:
     sl, tp = pos.get("sl"), pos.get("tp")
     if e and sl and tp:
         lines.append(f"SL {_px(sl)} ({(sl / e - 1) * 100:+.1f}%) | TP {_px(tp)} ({(tp / e - 1) * 100:+.1f}%)")
+    if plan:
+        lines.append(f"Exit plan: {plan}")
     if verdict is not None:
         lines.append(f"Judge ✅ APPROVE (confidence {verdict.confidence:.2f})")
     lines += [f"Mint: {pos.get('mint')}", f"https://dexscreener.com/solana/{pos.get('mint')}", PAPER_TAG]
     return "\n".join(lines)
 
 
+REASON_LABEL = {"take_profit": "take profit (+1000% target hit)", "stop_loss": "stop loss",
+                "breakeven_stop": "breakeven stop (profit protected)", "trailing_stop": "trailing stop (gave back part of the peak)",
+                "max_hold": "max hold time (in profit)", "time_stop": "time stop (never got into profit)",
+                "liquidity_gone": "rug guard (liquidity gone)", "no_price": "no price feed"}
+
+
+def peak_pct(p: dict) -> float | None:
+    """Highest % the position reached above its entry (market) price while open."""
+    vals = [p.get("max_up_pct")]
+    m = p.get("market_price")
+    if m and p.get("peak_price"):
+        vals.append((p["peak_price"] / m - 1) * 100)
+    vals = [v for v in vals if v is not None]
+    return max(vals) if vals else None
+
+
+def _partial_pct(p: dict) -> float | None:
+    m = p.get("market_price")
+    return (p["partial_price"] / m - 1) * 100 if m and p.get("partial_price") else None
+
+
 def sell_text(p: dict) -> str:
-    """v1.1.1: the SELL push - a paper position really closed, with P&L and the reason."""
+    """v1.1.1: the SELL push - a paper position really closed, with P&L and the reason.
+    v1.1.2: also the peak % reached and any 50% partial taken earlier (P&L is for the WHOLE position)."""
     pnl, pct = p.get("pnl_usd") or 0.0, p.get("pnl_pct") or 0.0
     e, x = p.get("entry_price"), p.get("exit_price")
     held = (p.get("exit_ts") or 0) - (p.get("open_ts") or 0)
-    lines = [f"🔴 SELL - {p.get('symbol') or _short(p['mint'])} [{p.get('universe')}] (paper #{p.get('id')})",
-             f"{'✅ PROFIT' if pnl > 0 else '❌ LOSS'} {_usd(pnl)} ({pct:+.1f}%)",
-             f"Reason: {p.get('exit_reason') or '?'}",
-             f"Entry {_px(e)} → exit {_px(x)} (slippage {p.get('exit_slippage_pct') or 0:.2f}%)"
-             + (f" | held {int(held // 60)} min" if held > 0 else ""),
-             f"Strategy {p.get('strategy')} | size {_usd(p.get('size_usd'))}",
-             f"Mint: {p.get('mint')}", PAPER_TAG]
+    pk = peak_pct(p)
+    r = p.get("exit_reason") or "?"
+    part = p.get("partial_ts") is not None
+    lines = [f"🔴 SELL{' (rest)' if part else ''} - {p.get('symbol') or _short(p['mint'])} [{p.get('universe')}] "
+             f"(paper #{p.get('id')})",
+             f"{'✅ PROFIT' if pnl > 0 else '❌ LOSS'} {_usd(pnl)} ({pct:+.1f}%)" + (" total, both sells" if part else ""),
+             f"Reason: {REASON_LABEL[r]} [{r}]" if r in REASON_LABEL else f"Reason: {r}"]
+    if pk is not None:
+        lines.append(f"Peak reached: {pk:+.1f}%")
+    if part:
+        pp = _partial_pct(p)
+        lines.append(f"Partial: {(p.get('partial_qty') or 0) / ((p.get('partial_qty') or 0) + (p.get('qty') or 0) or 1) * 100:.0f}%"
+                     f" sold earlier at {pp:+.1f}% for {_usd(p.get('partial_proceeds'))}; rest sold now")
+    lines += [f"Entry {_px(e)} → exit {_px(x)} (slippage {p.get('exit_slippage_pct') or 0:.2f}%)"
+              + (f" | held {int(held // 60)} min" if held > 0 else ""),
+              f"Strategy {p.get('strategy')} | size {_usd(p.get('size_usd'))}",
+              f"Mint: {p.get('mint')}", PAPER_TAG]
     return "\n".join(lines)
+
+
+def partial_text(p: dict) -> str:
+    """v1.1.2: half the position sold at the partial-profit level; the rest keeps running."""
+    pp, pk = _partial_pct(p), peak_pct(p)
+    sold = p.get("partial_qty") or 0
+    frac = sold / ((sold + (p.get("qty") or 0)) or 1) * 100
+    banked = (p.get("partial_proceeds") or 0) - (p.get("size_usd") or 0) * frac / 100
+    return "\n".join([
+        f"🟡 SELL {frac:.0f}% (partial profit) - {p.get('symbol') or _short(p['mint'])} [{p.get('universe')}] "
+        f"(paper #{p.get('id')})",
+        f"Sold {frac:.0f}% at {pp:+.1f}% → {_usd(p.get('partial_proceeds'))} cash (≈ {_usd(banked)} profit locked)"
+        if pp is not None else f"Sold {frac:.0f}% → {_usd(p.get('partial_proceeds'))} cash",
+        f"Remaining {100 - frac:.0f}% keeps running toward +1000%, stop at breakeven or better (trailing)"
+        + (f" | peak so far {pk:+.1f}%" if pk is not None else ""),
+        f"Strategy {p.get('strategy')} | size {_usd(p.get('size_usd'))}",
+        f"Mint: {p.get('mint')}", PAPER_TAG])
 
 
 def signal_text(row: dict) -> str:
@@ -153,11 +205,15 @@ def trade_text(kind: str, p: dict) -> str:
                 f"Strategy {p.get('strategy')} | size {_usd(p.get('size_usd'))} @ {_px(p.get('entry_price'))} "
                 f"(market {_px(p.get('market_price'))}, slippage {p.get('entry_slippage_pct') or 0:.2f}%, fee "
                 f"{_usd(p.get('buy_fee'))})\nSL {_px(p.get('sl'))} | TP {_px(p.get('tp'))}\n{PAPER_TAG}")
+    if kind == "PARTIAL":
+        return partial_text(p)
     pnl = p.get("pnl_usd") or 0
+    pk = peak_pct(p)
     return (f"{'✅' if pnl > 0 else '❌'} PAPER CLOSE #{p['id']} - {p.get('symbol') or _short(p['mint'])} "
             f"[{p.get('universe')}]\nWhy: {p.get('exit_reason')} | exit {_px(p.get('exit_price'))} (market "
             f"{_px(p.get('exit_market_price'))}, slippage {p.get('exit_slippage_pct') or 0:.2f}%)\n"
-            f"P&L after fees {_usd(pnl)} ({p.get('pnl_pct') or 0:+.1f}%)\n{PAPER_TAG}")
+            f"P&L after fees {_usd(pnl)} ({p.get('pnl_pct') or 0:+.1f}%)"
+            + (f" | peak {pk:+.1f}%" if pk is not None else "") + f"\n{PAPER_TAG}")
 
 
 # ====================================================================== rate limiting
@@ -350,11 +406,15 @@ class TelegramBot:
                 if kind == "CLOSE" and self.s.tg_notify == "trades":
                     self.alert(sell_text(pos), "sell")
                     return
+                if kind == "PARTIAL" and self.s.tg_notify == "trades":
+                    self.alert(partial_text(pos), "sell")
+                    return
                 if kind != "OPEN":
                     self.stats["silenced_paper_" + kind.lower()] += 1
                     return
                 row, verdict = getattr(self, "_last_sig", {}).pop(pos.get("mint"), (None, None))
-                self.alert(buy_text(pos, row, verdict), "buy")
+                self.alert(buy_text(pos, row, verdict, ExitPolicy.from_settings(self.s).summary()
+                                    if ExitPolicy.from_settings(self.s).run else None), "buy")
                 return
             self.alert(trade_text(kind, pos), f"paper_{kind.lower()}")
         except Exception as e:  # noqa: BLE001
@@ -613,6 +673,7 @@ class TelegramBot:
                      f"{self.stats['ignored_foreign']}" + (" | ⚠️ 409 conflict" if self.conflict else "")
                      + (" | alerts DRY-RUN" if self.dry_run else "")
                      + {"buy": " | push: BUY only", "trades": " | push: BUY + SELL only"}.get(self.s.tg_notify, " | push: all"))
+        lines.append("Exits: " + ExitPolicy.from_settings(self.s).summary())
         return "\n".join(lines)
 
     def cmd_scanner(self) -> str:

@@ -29,7 +29,7 @@ def main(path: str, seed: int) -> None:
     s = load_settings(env={"PAPER_MAX_OPEN": "5", "PAPER_START_BALANCE": "100000",   # pre-v1.1 gates (tiny fixtures)
                            "TRADE_MIN_MCAP_USD": "0", "EVAL_MIN_MCAP_USD": "0", "TRADE_MIN_LIQ_USD": "0",
                            "TRADE_MIN_LIQ_MCAP": "0", "TRADE_MIN_AGE_MIN": "0", "COINS_PER_DAY": "0",
-                           "MIN_TRADE_SCORE": "65", "SHADOW_TRACK": "false"})
+                           "MIN_TRADE_SCORE": "65", "SHADOW_TRACK": "false", "EXIT_POLICY": "classic"})
     db = Database(path)
     db.acquire_writer_lock()
     ensure_defaults(db)

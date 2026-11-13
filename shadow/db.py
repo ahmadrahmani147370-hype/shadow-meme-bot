@@ -198,6 +198,13 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS idx_updates_target ON strategy_updates(target, ts);
     CREATE INDEX IF NOT EXISTS idx_params_active ON strategy_params(strategy, active);
     """,
+    # v1.1.2: partial profit taking (part of the position sold, the rest rides)
+    """
+    ALTER TABLE paper_positions ADD COLUMN partial_ts REAL;
+    ALTER TABLE paper_positions ADD COLUMN partial_qty REAL;
+    ALTER TABLE paper_positions ADD COLUMN partial_price REAL;
+    ALTER TABLE paper_positions ADD COLUMN partial_proceeds REAL;
+    """,
 ]
 
 MARKET_COLS = ("mint", "symbol", "name", "pair_address", "dex_id", "quote_symbol", "price_usd", "price_native",

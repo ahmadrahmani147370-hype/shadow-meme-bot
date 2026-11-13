@@ -13,7 +13,22 @@ from shadow.strategies import DEFAULT_PARAMS, LIMITS, TUNABLE, load_strategies, 
 
 S = load_settings(env={})
 T0 = 1_800_000_000.0
-EE = {**DEFAULT_PARAMS["early_entry"]["params"]["new"]}
+# Learner MECHANICS are tested with the pre-v1.1.2 knob (TP 30%, tunable 5..300). The real v1.1.2 rule
+# (TP never below 1000%, not tunable in run mode) is tested in tests/test_v112.py.
+EE = {**DEFAULT_PARAMS["early_entry"]["params"]["new"], "tp_pct": 30.0}
+
+
+@pytest.fixture(autouse=True)
+def legacy_tp(monkeypatch):
+    import copy
+
+    import shadow.learning as L
+    import shadow.strategies as ST
+    dp = copy.deepcopy(ST.DEFAULT_PARAMS)
+    dp["early_entry"]["params"]["new"]["tp_pct"] = 30.0
+    monkeypatch.setattr(ST, "DEFAULT_PARAMS", dp)
+    monkeypatch.setattr(ST, "migrate_v112", lambda db, tp_pct=1000.0: [])
+    monkeypatch.setattr(L, "LIMITS", {**ST.LIMITS, "tp_pct": (5.0, 300.0)})
 
 
 def path(*pcts, every=30):

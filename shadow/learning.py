@@ -30,6 +30,7 @@ import time
 from .config import Settings
 from .db import Database
 from .judge import APPROVE, JUDGE_LIMITS, JUDGE_TUNABLE, VETO, default_judge_params, ensure_judge_params
+from .exits import ExitPolicy
 from .strategies import LIMITS, STRATEGIES, TUNABLE, load_strategies, new_version, rollback
 
 PHASE = 6
@@ -44,9 +45,11 @@ def cost_pct(s: Settings) -> float:
 
 
 # ---------------------------------------------------------------- replay
-def simulate(strategy: str, p: dict, sample: dict, costs: float) -> dict | None:
+def simulate(strategy: str, p: dict, sample: dict, costs: float, policy=None) -> dict | None:
     """Replay one recorded opportunity with params p. Returns net % (after costs) and the exit reason.
-    None if the path is too short to decide (the exit lies beyond the recorded horizon)."""
+    None if the path is too short to decide (the exit lies beyond the recorded horizon).
+    v1.1.2: with a `run` ExitPolicy the exits are the policy's (TP 1000%, breakeven, tiered trail, partial) -
+    the same rules as the paper engine; only SL / time stop / min_score come from p."""
     entry, pts = sample["entry"], sample["path"]
     if not entry or not pts:
         return None
@@ -56,6 +59,9 @@ def simulate(strategy: str, p: dict, sample: dict, costs: float) -> dict | None:
         dist = min(sample["sl_dist_pct"] or p["max_sl_pct"], p["max_sl_pct"])
     else:
         dist = p["sl_pct"]
+    if policy is not None and policy.run:
+        r = policy.replay(entry, pts, entry * (1 - dist / 100), p["time_stop_min"])
+        return None if r is None else {"taken": True, "net": r[0] - costs, "reason": r[1]}
     sl, tp = entry * (1 - dist / 100), entry * (1 + p["tp_pct"] / 100)
     stop_t = p["time_stop_min"] * 60
     peak = entry
@@ -75,9 +81,9 @@ def simulate(strategy: str, p: dict, sample: dict, costs: float) -> dict | None:
     return None
 
 
-def evaluate(strategy: str, p: dict, samples: list[dict], costs: float) -> dict:
+def evaluate(strategy: str, p: dict, samples: list[dict], costs: float, policy=None) -> dict:
     """Mean net % per OPPORTUNITY (filtered-out ones count as 0), so skipping losers is rewarded."""
-    res = [simulate(strategy, p, x, costs) for x in samples]
+    res = [simulate(strategy, p, x, costs, policy) for x in samples]
     res = [r for r in res if r is not None]
     taken = [r for r in res if r["taken"]]
     n = len(res)
@@ -214,7 +220,16 @@ def judge_stats(db: Database, since_ts: float = 0, costs: float = 0.0) -> dict:
 class Learner:
     def __init__(self, settings: Settings, db: Database, clock=time.time, judge=None):
         self.s, self.db, self.clock, self.judge = settings, db, clock, judge
+        self.policy = ExitPolicy.from_settings(settings)    # v1.1.2: replay with the live exit rules
         self.last_summary: list[dict] = []
+
+    POLICY_KEYS = ("tp_pct", "trail_pct", "trail_activate_pct")
+
+    def tunable(self, name: str) -> tuple:
+        """v1.1.2: with the run exit policy, TP (1000%) and the trailing stop belong to the policy - the learner
+        tunes only entries / SL / time stop and can never shrink the take profit back."""
+        keys = TUNABLE[name]
+        return tuple(k for k in keys if k not in self.POLICY_KEYS) if self.policy.run else keys
 
     def _last_change_ts(self, target: str) -> float:
         r = self.db.con.execute("SELECT MAX(ts) FROM strategy_updates WHERE target=?", (target,)).fetchone()
@@ -241,13 +256,13 @@ class Learner:
                 out.append({"target": name, "universe": u, "action": "insufficient", "n": len(samples),
                             "need": s.learn_min_trades})
                 continue
-            base_tr, base_te = evaluate(name, cur, train, costs), evaluate(name, cur, test, costs)
+            base_tr, base_te = evaluate(name, cur, train, costs, self.policy), evaluate(name, cur, test, costs, self.policy)
             if base_tr["score"] is None or base_te["score"] is None:
                 continue
             evaluated = True
-            for k, old, new in candidates(cur, TUNABLE[name], LIMITS, s.learn_max_step_pct):
+            for k, old, new in candidates(cur, self.tunable(name), LIMITS, s.learn_max_step_pct):
                 cand = {**cur, k: new}
-                tr = evaluate(name, cand, train, costs)
+                tr = evaluate(name, cand, train, costs, self.policy)
                 if tr["score"] is None:
                     continue
                 g = shrink(tr["score"] - base_tr["score"], tr["n"], s.learn_shrink_k)
@@ -260,7 +275,7 @@ class Learner:
             if evaluated:
                 out.append({"target": name, "action": "no_better_candidate"})
             return out
-        te = evaluate(name, best["cand"], best["test"], costs)
+        te = evaluate(name, best["cand"], best["test"], costs, self.policy)
         base_te = best["base_te"]
         metrics = {"before": {"train": best["train"][0], "test": base_te}, "after": {"train": best["train"][1], "test": te},
                    "cost_pct": costs, "universe": best["universe"]}
@@ -295,7 +310,7 @@ class Learner:
         per = {}
         for u in st.universes:
             samples = strategy_samples(self.db, name, u, version=row["version"])
-            a, b = evaluate(name, st.p(u), samples, costs), evaluate(name, pst.p(u), samples, costs)
+            a, b = evaluate(name, st.p(u), samples, costs, self.policy), evaluate(name, pst.p(u), samples, costs, self.policy)
             if a["n"]:
                 live_new += a["score"] * a["n"]
                 live_old += b["score"] * b["n"]

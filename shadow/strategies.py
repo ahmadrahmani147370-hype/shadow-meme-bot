@@ -29,7 +29,7 @@ DEFAULT_PARAMS: dict[str, dict] = {
     "early_entry": {
         "universes": [U_NEW],
         "params": {
-            U_NEW: {"min_score": 70, "max_age_min": 60, "max_ext_60m_pct": 150.0, "sl_pct": 12.0, "tp_pct": 30.0,
+            U_NEW: {"min_score": 70, "max_age_min": 60, "max_ext_60m_pct": 150.0, "sl_pct": 12.0, "tp_pct": 1000.0,
                     "time_stop_min": 20, "need_pressure": True,
                     "trail_pct": 10.0, "trail_activate_pct": 15.0},
         },
@@ -37,33 +37,33 @@ DEFAULT_PARAMS: dict[str, dict] = {
     "first_pullback": {
         "universes": [U_NEW, U_MCAP, U_VOLUME],
         "params": {
-            U_NEW: {"min_score": 65, "sl_below_low_pct": 3.0, "max_sl_pct": 15.0, "tp_pct": 25.0, "time_stop_min": 45,
+            U_NEW: {"min_score": 65, "sl_below_low_pct": 3.0, "max_sl_pct": 15.0, "tp_pct": 1000.0, "time_stop_min": 45,
                     "trail_pct": 8.0, "trail_activate_pct": 12.0},
-            U_MCAP: {"min_score": 65, "sl_below_low_pct": 1.5, "max_sl_pct": 8.0, "tp_pct": 10.0, "time_stop_min": 120,
+            U_MCAP: {"min_score": 65, "sl_below_low_pct": 1.5, "max_sl_pct": 8.0, "tp_pct": 1000.0, "time_stop_min": 120,
                      "trail_pct": 3.0, "trail_activate_pct": 5.0},
-            U_VOLUME: {"min_score": 65, "sl_below_low_pct": 2.0, "max_sl_pct": 10.0, "tp_pct": 15.0, "time_stop_min": 90,
+            U_VOLUME: {"min_score": 65, "sl_below_low_pct": 2.0, "max_sl_pct": 10.0, "tp_pct": 1000.0, "time_stop_min": 90,
                        "trail_pct": 4.0, "trail_activate_pct": 7.0},
         },
     },
     "migration_breakout": {
         "universes": [U_NEW, U_MCAP, U_VOLUME],
         "params": {
-            U_NEW: {"min_score": 65, "max_since_migration_min": 60, "sl_pct": 10.0, "tp_pct": 35.0, "time_stop_min": 30,
+            U_NEW: {"min_score": 65, "max_since_migration_min": 60, "sl_pct": 10.0, "tp_pct": 1000.0, "time_stop_min": 30,
                     "trail_pct": 10.0, "trail_activate_pct": 15.0},
-            U_MCAP: {"min_score": 65, "max_since_migration_min": 120, "sl_pct": 7.0, "tp_pct": 20.0, "time_stop_min": 60,
+            U_MCAP: {"min_score": 65, "max_since_migration_min": 120, "sl_pct": 7.0, "tp_pct": 1000.0, "time_stop_min": 60,
                      "trail_pct": 4.0, "trail_activate_pct": 8.0},
-            U_VOLUME: {"min_score": 65, "max_since_migration_min": 120, "sl_pct": 8.0, "tp_pct": 25.0, "time_stop_min": 45,
+            U_VOLUME: {"min_score": 65, "max_since_migration_min": 120, "sl_pct": 8.0, "tp_pct": 1000.0, "time_stop_min": 45,
                        "trail_pct": 6.0, "trail_activate_pct": 10.0},
         },
     },
     "momentum_breakout": {
         "universes": [U_NEW, U_MCAP, U_VOLUME],
         "params": {
-            U_NEW: {"min_score": 60, "sl_pct": 10.0, "tp_pct": 15.0, "time_stop_min": 45,
+            U_NEW: {"min_score": 60, "sl_pct": 10.0, "tp_pct": 1000.0, "time_stop_min": 45,
                     "trail_pct": 4.0, "trail_activate_pct": 7.0},
-            U_MCAP: {"min_score": 50, "sl_pct": 8.0, "tp_pct": 10.0, "time_stop_min": 120,
+            U_MCAP: {"min_score": 50, "sl_pct": 8.0, "tp_pct": 1000.0, "time_stop_min": 120,
                      "trail_pct": 3.0, "trail_activate_pct": 5.0},
-            U_VOLUME: {"min_score": 55, "sl_pct": 8.0, "tp_pct": 12.0, "time_stop_min": 90,
+            U_VOLUME: {"min_score": 55, "sl_pct": 8.0, "tp_pct": 1000.0, "time_stop_min": 90,
                        "trail_pct": 3.5, "trail_activate_pct": 6.0},
         },
     },
@@ -77,7 +77,8 @@ TUNABLE: dict[str, tuple] = {
     "migration_breakout": ("sl_pct", "tp_pct", "time_stop_min", "trail_pct", "trail_activate_pct", "min_score"),
     "momentum_breakout": ("sl_pct", "tp_pct", "time_stop_min", "trail_pct", "trail_activate_pct", "min_score"),
 }
-LIMITS = {"sl_pct": (2.0, 30.0), "max_sl_pct": (2.0, 30.0), "tp_pct": (3.0, 200.0), "time_stop_min": (5, 240),
+LIMITS = {"sl_pct": (2.0, 30.0), "max_sl_pct": (2.0, 30.0), "tp_pct": (1000.0, 100000.0),   # v1.1.2: never < 1000%
+           "time_stop_min": (5, 240),
           "trail_pct": (1.0, 40.0), "trail_activate_pct": (1.0, 100.0), "min_score": (45, 90)}
 
 
@@ -173,10 +174,39 @@ def migrate_v11(db: Database) -> list[str]:
     return done
 
 
+def migrate_v112(db: Database, tp_pct: float = 1000.0) -> list[str]:
+    """One-time (v1.1.2, Ahmed: "let winners run to 1000%"): every active strategy version with a take profit
+    below 1000% gets a new version with tp_pct=1000 on all its universes; all other (possibly learned)
+    params are kept. Recorded in strategy_updates for /strategies."""
+    if db.meta_get("migrated_v112") == "1":
+        return []
+    done = []
+    for name in DEFAULT_PARAMS:
+        cur = db.active_strategy_params(name)
+        if cur is None:
+            continue
+        params = copy.deepcopy(cur["params"])
+        changes = {}
+        for u, ps in params.items():
+            if ps.get("tp_pct") is not None and ps["tp_pct"] < tp_pct:
+                changes[f"{u}.tp_pct"] = [ps["tp_pct"], tp_pct]
+                ps["tp_pct"] = tp_pct
+        if not changes:
+            continue
+        v = new_version(db, name, params, "v1.1.2", note="let winners run: TP 1000% + breakeven / tiered trail")
+        db.add_strategy_update("param_change", name, cur["version"], v, changes,
+                               "v1.1.2: take profit raised to +1000%; profits protected by breakeven + tiered "
+                               "trailing stop + 50% partial at +30% (exit policy)", {})
+        done.append(name)
+    db.meta_set("migrated_v112", "1")
+    return done
+
+
 def load_strategies(db: Database) -> dict[str, Strategy]:
     ensure_defaults(db)
     try:
         migrate_v11(db)
+        migrate_v112(db)
     except Exception:  # noqa: BLE001  read-only views (reports/export) must still load strategies
         pass
     out = {}
@@ -209,5 +239,5 @@ def rollback(db: Database, name: str, version: int) -> None:
         db.con.execute("UPDATE strategy_params SET active=1 WHERE strategy=? AND version=?", (name, version))
 
 
-__all__ = ["Strategy", "DEFAULT_PARAMS", "STRATEGIES", "ensure_defaults", "load_strategies", "migrate_v11",
+__all__ = ["Strategy", "DEFAULT_PARAMS", "STRATEGIES", "ensure_defaults", "load_strategies", "migrate_v11", "migrate_v112",
            "new_version", "rollback"]
