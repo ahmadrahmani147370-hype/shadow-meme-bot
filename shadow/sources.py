@@ -59,8 +59,9 @@ ENDPOINTS: tuple[Endpoint, ...] = (
     Endpoint("jupiter_quote", "sellability check (token -> SOL route + price impact)",
              f"https://api.jup.ag/swap/v1/quote?inputMint={BONK}&outputMint={WSOL}&amount=1000000000000&slippageBps=500",
              expect="outAmount", key_needed="optional", limit="keyless 0.5 req/s (30/min), shared bucket with price"),
+    # required=False until phase 8 wires Telegram: a blocked network only WARNs for now.
     Endpoint("telegram_api", "alerts + commands (phase 8)", "https://api.telegram.org/", expect="",
-             limit="~30 msg/s overall, ~1 msg/s per chat"),
+             required=False, limit="~30 msg/s overall, ~1 msg/s per chat"),
     Endpoint("pumpfun_frontend", "Pump.fun coin lists / king-of-the-hill (optional extra)",
              "https://frontend-api-v3.pump.fun/coins?offset=0&limit=1&sort=created_timestamp&order=DESC&includeNsfw=false",
              expect="mint", required=False, limit="undocumented; Cloudflare 403 from datacenter IPs"),

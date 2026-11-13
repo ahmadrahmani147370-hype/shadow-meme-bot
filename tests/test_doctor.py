@@ -115,7 +115,7 @@ def test_telegram_connect_timeout_gives_hint(tmp_settings):
         raise httpx.ConnectTimeout("timed out", request=req)
     eps = tuple(e for e in ENDPOINTS if e.name == "telegram_api")
     res = asyncio.run(doctor.check_network(tmp_settings, eps, transport=httpx.MockTransport(boom)))
-    assert res[0].status == doctor.FAIL
+    assert res[0].status == doctor.WARN  # becomes required in phase 8
     assert "1.1.1.1" in res[0].detail and "TELEGRAM_API_BASE" in res[0].detail and "another network" in res[0].detail
 
 
