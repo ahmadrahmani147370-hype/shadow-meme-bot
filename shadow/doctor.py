@@ -167,6 +167,8 @@ def _endpoint_for_settings(e: Endpoint, s: Settings) -> Endpoint:
         return replace(e, url=s.solana_rpc_fallback)
     if e.name == "pumpportal_ws":
         return replace(e, url=s.pumpportal_ws)
+    if e.name == "telegram_api" and s.telegram_api_base:
+        return replace(e, url=s.telegram_api_base.rstrip("/") + "/")
     if e.name.startswith("jupiter") and s.jupiter_api_key:
         return replace(e, headers={**e.headers, "x-api-key": s.jupiter_api_key})
     if e.name.startswith("rugcheck") and s.rugcheck_api_key:
@@ -176,9 +178,16 @@ def _endpoint_for_settings(e: Endpoint, s: Settings) -> Endpoint:
     return e
 
 
+TELEGRAM_HINT = ("Telegram can't be reached from this network (common on some Pakistani mobile networks). "
+                 "Try: 1) another network (Wi-Fi / other SIM), 2) the free 1.1.1.1 (Cloudflare WARP) app, "
+                 "3) advanced: TELEGRAM_API_BASE=<your https Bot API mirror> in .env. Needed only from phase 8.")
+
+
 def _classify(e: Endpoint, code: int | None, body: str, err: str = "") -> tuple[str, str]:
     bad = FAIL if e.required else WARN
     if err:
+        if e.name == "telegram_api" and any(k in err for k in ("ConnectTimeout", "ConnectError", "ReadTimeout")):
+            return bad, f"{err.split(':')[0]} -> {TELEGRAM_HINT}"
         return bad, err
     if code == 429:
         return WARN, "429 rate limited (reachable, slow down)"

@@ -1,7 +1,8 @@
 """SQLite storage.
 
-PHASE 7 builds the full schema (signals, prices, paper trades, positions). Phase 2 only adds the
-migration framework and the `seen_tokens` table used for de-duplication across restarts.
+PHASE 7 builds the full schema (signals, prices, paper trades, positions). Phase 2 added the
+migration framework and `seen_tokens` (de-dup across restarts); phase 3 adds token_market,
+price_snapshots, candles_1m and collector_drops (schema v2) plus retention cleanup.
 Schema changes are numbered migrations tracked in PRAGMA user_version, so later phases only append
 to MIGRATIONS and existing databases upgrade in place without losing data.
 """
@@ -12,10 +13,12 @@ import sqlite3
 import time
 from pathlib import Path
 
-from .models import AMM, BONDING, MIGRATED, TokenEvent
+from dataclasses import asdict, fields
+
+from .models import AMM, BONDING, MIGRATED, Candle, MarketData, TokenEvent
 
 PHASE = 7
-IMPLEMENTED = False  # partial: migrations + seen_tokens only
+IMPLEMENTED = False  # partial: migrations, seen_tokens, market data, snapshots, candles
 
 MIGRATIONS: list[str] = [
     # v1 (phase 2): de-dup table for the scanner
@@ -41,7 +44,42 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS idx_seen_first ON seen_tokens(first_seen_ts);
     CREATE INDEX IF NOT EXISTS idx_seen_status ON seen_tokens(status);
     """,
+    # v2 (phase 3): market data, price snapshots, 1-minute candles, collector drops
+    """
+    CREATE TABLE IF NOT EXISTS token_market (
+        mint TEXT PRIMARY KEY, symbol TEXT, name TEXT, pair_address TEXT, dex_id TEXT, quote_symbol TEXT,
+        price_usd REAL, price_native REAL, market_cap REAL, fdv REAL, liquidity_usd REAL, liquidity_source TEXT,
+        vol_m5 REAL, vol_h1 REAL, vol_h6 REAL, vol_h24 REAL,
+        buys_m5 INTEGER, sells_m5 INTEGER, buys_h1 INTEGER, sells_h1 INTEGER,
+        buys_h6 INTEGER, sells_h6 INTEGER, buys_h24 INTEGER, sells_h24 INTEGER,
+        price_change_m5 REAL, price_change_h1 REAL, pair_created_ts REAL, launch_ts REAL,
+        migration_status TEXT, n_pairs INTEGER, source TEXT, updated_ts REAL,
+        first_enriched_ts REAL, tracking INTEGER NOT NULL DEFAULT 0, stop_reason TEXT, stopped_ts REAL
+    );
+    CREATE INDEX IF NOT EXISTS idx_market_tracking ON token_market(tracking);
+    CREATE TABLE IF NOT EXISTS price_snapshots (
+        id INTEGER PRIMARY KEY, mint TEXT NOT NULL, ts REAL NOT NULL, price_usd REAL, market_cap REAL,
+        liquidity_usd REAL, vol_m5 REAL, vol_h24 REAL, buys_h24 INTEGER, sells_h24 INTEGER, source TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_snap_mint_ts ON price_snapshots(mint, ts);
+    CREATE INDEX IF NOT EXISTS idx_snap_ts ON price_snapshots(ts);
+    CREATE TABLE IF NOT EXISTS candles_1m (
+        mint TEXT NOT NULL, ts INTEGER NOT NULL, open REAL, high REAL, low REAL, close REAL,
+        volume_usd REAL, buys INTEGER, sells INTEGER, n_snapshots INTEGER, source TEXT NOT NULL,
+        PRIMARY KEY (mint, ts, source)
+    );
+    CREATE INDEX IF NOT EXISTS idx_candles_ts ON candles_1m(ts);
+    CREATE TABLE IF NOT EXISTS collector_drops (
+        mint TEXT PRIMARY KEY, reason TEXT NOT NULL, ts REAL NOT NULL, detail TEXT
+    );
+    """,
 ]
+
+MARKET_COLS = ("mint", "symbol", "name", "pair_address", "dex_id", "quote_symbol", "price_usd", "price_native",
+               "market_cap", "fdv", "liquidity_usd", "liquidity_source", "vol_m5", "vol_h1", "vol_h6", "vol_h24",
+               "buys_m5", "sells_m5", "buys_h1", "sells_h1", "buys_h6", "sells_h6", "buys_h24", "sells_h24",
+               "price_change_m5", "price_change_h1", "pair_created_ts", "launch_ts", "migration_status",
+               "n_pairs", "source", "updated_ts")
 
 SCHEMA_VERSION = len(MIGRATIONS)
 
@@ -135,6 +173,92 @@ class Database:
         with self.con:
             return self.con.execute("DELETE FROM seen_tokens WHERE first_seen_ts < ?",
                                     (time.time() - older_than_days * 86400,)).rowcount
+
+
+    # ---------------------------------------------------------------- phase 3 tables
+    def upsert_market(self, m: MarketData, tracking: bool | None = None) -> None:
+        d = asdict(m)
+        vals = [d[c] for c in MARKET_COLS]
+        sets = ", ".join(f"{c}=excluded.{c}" for c in MARKET_COLS if c != "mint")
+        track_sql = "" if tracking is None else f", tracking={1 if tracking else 0}"
+        with self.con:
+            self.con.execute(
+                f"INSERT INTO token_market ({', '.join(MARKET_COLS)}, first_enriched_ts, tracking) "
+                f"VALUES ({', '.join('?' * len(MARKET_COLS))}, ?, ?) ON CONFLICT(mint) DO UPDATE SET {sets}{track_sql}",
+                vals + [m.updated_ts, 1 if tracking else 0])
+
+
+    def get_market(self, mint: str) -> MarketData | None:
+        r = self.con.execute(f"SELECT {', '.join(MARKET_COLS)} FROM token_market WHERE mint=?", (mint,)).fetchone()
+        if not r:
+            return None
+        names = {f.name for f in fields(MarketData)}
+        return MarketData(**{k: r[k] for k in r.keys() if k in names and r[k] is not None})
+
+
+    def set_tracking(self, mint: str, tracking: bool, reason: str = "") -> None:
+        with self.con:
+            self.con.execute("UPDATE token_market SET tracking=?, stop_reason=?, stopped_ts=? WHERE mint=?",
+                             (1 if tracking else 0, reason or None, None if tracking else time.time(), mint))
+
+
+    def tracked_mints(self) -> list[str]:
+        return [r[0] for r in self.con.execute("SELECT mint FROM token_market WHERE tracking=1")]
+
+
+    def add_snapshots(self, rows: list[tuple]) -> None:
+        """rows: (mint, ts, price_usd, market_cap, liquidity_usd, vol_m5, vol_h24, buys_h24, sells_h24, source)"""
+        if rows:
+            with self.con:
+                self.con.executemany("INSERT INTO price_snapshots (mint, ts, price_usd, market_cap, liquidity_usd, vol_m5,"
+                                     " vol_h24, buys_h24, sells_h24, source) VALUES (?,?,?,?,?,?,?,?,?,?)", rows)
+
+
+    def upsert_candles(self, candles: list[Candle]) -> None:
+        if candles:
+            with self.con:
+                self.con.executemany(
+                    "INSERT OR REPLACE INTO candles_1m (mint, ts, open, high, low, close, volume_usd, buys, sells,"
+                    " n_snapshots, source) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    [(c.mint, c.ts, c.open, c.high, c.low, c.close, c.volume_usd, c.buys, c.sells, c.n_snapshots,
+                      c.source) for c in candles])
+
+
+    def get_candles(self, mint: str, since_ts: float = 0, source: str = "local") -> list[Candle]:
+        rows = self.con.execute("SELECT * FROM candles_1m WHERE mint=? AND ts>=? AND source=? ORDER BY ts",
+                                (mint, since_ts, source)).fetchall()
+        return [Candle(**dict(r)) for r in rows]
+
+
+    def add_drop(self, mint: str, reason: str, detail: str = "") -> None:
+        with self.con:
+            self.con.execute("INSERT OR REPLACE INTO collector_drops (mint, reason, ts, detail) VALUES (?,?,?,?)",
+                             (mint, reason, time.time(), detail[:300]))
+
+
+    def cleanup(self, snapshot_retention_h: float, candle_retention_h: float, market_retention_d: float = 7,
+                 seen_retention_d: float = 14, now: float | None = None) -> dict:
+        now = now or time.time()
+        out = {}
+        with self.con:
+            out["snapshots"] = self.con.execute("DELETE FROM price_snapshots WHERE ts < ?",
+                                                (now - snapshot_retention_h * 3600,)).rowcount
+            out["candles"] = self.con.execute("DELETE FROM candles_1m WHERE ts < ?",
+                                              (now - candle_retention_h * 3600,)).rowcount
+            out["market"] = self.con.execute("DELETE FROM token_market WHERE tracking=0 AND updated_ts < ?",
+                                             (now - market_retention_d * 86400,)).rowcount
+            out["drops"] = self.con.execute("DELETE FROM collector_drops WHERE ts < ?",
+                                            (now - market_retention_d * 86400,)).rowcount
+            out["seen"] = self.con.execute("DELETE FROM seen_tokens WHERE first_seen_ts < ?",
+                                           (now - seen_retention_d * 86400,)).rowcount
+        return out
+
+
+    def table_counts(self) -> dict:
+        return {t: self.con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                for t in ("seen_tokens", "token_market", "price_snapshots", "candles_1m", "collector_drops")}
+
+
 
 
 __all__ = ["Database", "MIGRATIONS", "SCHEMA_VERSION", "BONDING", "MIGRATED", "AMM"]

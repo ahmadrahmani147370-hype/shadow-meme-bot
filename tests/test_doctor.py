@@ -110,6 +110,24 @@ def test_network_classification_with_mock(tmp_settings):
     assert res["weird"].status == doctor.FAIL
 
 
+def test_telegram_connect_timeout_gives_hint(tmp_settings):
+    def boom(req):
+        raise httpx.ConnectTimeout("timed out", request=req)
+    eps = tuple(e for e in ENDPOINTS if e.name == "telegram_api")
+    res = asyncio.run(doctor.check_network(tmp_settings, eps, transport=httpx.MockTransport(boom)))
+    assert res[0].status == doctor.FAIL
+    assert "1.1.1.1" in res[0].detail and "TELEGRAM_API_BASE" in res[0].detail and "another network" in res[0].detail
+
+
+def test_telegram_api_base_setting_used_and_validated():
+    e = next(x for x in ENDPOINTS if x.name == "telegram_api")
+    s = load_settings(env={"TELEGRAM_API_BASE": "https://tg.example.com/"})
+    assert s.telegram_api_base == "https://tg.example.com"
+    assert doctor._endpoint_for_settings(e, s).url == "https://tg.example.com/"
+    bad = load_settings(env={"TELEGRAM_API_BASE": "http://insecure.example"})
+    assert bad.telegram_api_base == "https://api.telegram.org" and bad.warnings
+
+
 def test_jupiter_key_header_only_when_set():
     e = next(x for x in ENDPOINTS if x.name == "jupiter_price")
     assert "x-api-key" not in doctor._endpoint_for_settings(e, load_settings(env={})).headers
@@ -152,7 +170,7 @@ def test_main_py_debug_doctor(monkeypatch, tmp_settings, no_pkg_check):
 
 def test_stubs_are_marked():
     import importlib
-    for mod, ph in [("collector", 3), ("safety", 4), ("signals", 5), ("strategies", 5),
+    for mod, ph in [("safety", 4), ("signals", 5), ("strategies", 5),
                     ("paper", 6), ("telegram_bot", 8), ("dashboard", 9)]:
         m = importlib.import_module(f"shadow.{mod}")
         assert m.PHASE == ph and m.IMPLEMENTED is False

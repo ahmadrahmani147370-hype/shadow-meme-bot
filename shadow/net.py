@@ -28,6 +28,8 @@ class RateLimiter:
     _next_at: float = 0.0
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _penalty: float = 0.0
+    calls: int = 0          # requests released by this queue
+    hits_429: int = 0
 
     @property
     def interval(self) -> float:
@@ -41,9 +43,11 @@ class RateLimiter:
                 await self.sleep(wait)
                 now = self.clock()
             self._next_at = max(now, self._next_at) + self.interval
+            self.calls += 1
 
     def penalize(self, retry_after: float | None = None) -> float:
         """Called on HTTP 429: delay everybody in this queue."""
+        self.hits_429 += 1
         self._penalty = min(max(self._penalty * 2, self.interval), 300.0)
         delay = retry_after if retry_after else self._penalty
         self._next_at = max(self._next_at, self.clock() + delay)
@@ -67,6 +71,10 @@ DEFAULT_BUDGETS = {
 
 def make_limiters(budgets: dict | None = None) -> dict[str, RateLimiter]:
     return {k: RateLimiter(k, v) for k, v in (budgets or DEFAULT_BUDGETS).items()}
+
+
+def limiter_stats(limiters: dict) -> dict:
+    return {k: {"calls": v.calls, "429": v.hits_429} for k, v in limiters.items() if v.calls or v.hits_429}
 
 
 async def fetch_json(client, limiter: RateLimiter, url: str, *, params=None, headers=None):

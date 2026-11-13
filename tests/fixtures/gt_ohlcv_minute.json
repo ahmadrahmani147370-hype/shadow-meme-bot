@@ -1,0 +1,32 @@
+{
+ "data": {
+  "id": "75eed3a8-147c-4fa7-8557-439d1fcbdd1c",
+  "type": "ohlcv_request_response",
+  "attributes": {
+   "ohlcv_list": [
+    [
+     1794537480,
+     2.2610483681696613e-06,
+     2.489534822441568e-06,
+     1.4383965350403268e-07,
+     2.2724962405573362e-07,
+     249.01878084956957
+    ]
+   ]
+  }
+ },
+ "meta": {
+  "base": {
+   "name": "$nihao",
+   "symbol": "$nihao",
+   "coingecko_coin_id": null,
+   "address": "GBVLXuVqzSkw2NQrfFHvS8DXNJ975ZkwixHJE2Fxpump"
+  },
+  "quote": {
+   "name": "Wrapped SOL",
+   "symbol": "SOL",
+   "coingecko_coin_id": "wrapped-solana",
+   "address": "So11111111111111111111111111111111111111112"
+  }
+ }
+}

@@ -4,6 +4,7 @@
     python main.py --debug doctor   # self-check (same as: python -m shadow.doctor)
     python main.py --debug doctor --offline
     python main.py --debug scan [seconds] [fallback]   # live scanner test (phase 2)
+    python main.py --debug collect [seconds]           # scanner + collector live test (phase 3)
 
 Exit codes: 0 ok, 1 doctor found a FAIL, 2 config error, 3 feature not built yet (start.sh stops on 2 and 3).
 """
@@ -18,7 +19,7 @@ from shadow.config import load_settings
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=f"SHADOW MEME {__version__} (paper-only)")
-    ap.add_argument("--debug", nargs="+", metavar="CMD", help="debug tools: doctor [offline] [json] | scan [seconds] [fallback]")
+    ap.add_argument("--debug", nargs="+", metavar="CMD", help="debug tools: doctor [offline] [json] | scan [seconds] [fallback] | collect [seconds]")
     a = ap.parse_args(argv)
 
     if a.debug:
@@ -37,6 +38,19 @@ def main(argv: list[str] | None = None) -> int:
             secs = next((float(x) for x in rest if x.replace(".", "", 1).isdigit()), 60.0)
             try:
                 asyncio.run(run_scan(load_settings(), secs, force_fallback="fallback" in rest))
+            except KeyboardInterrupt:
+                pass
+            return 0
+        if cmd == "collect":
+            import asyncio
+            import logging
+
+            from shadow.collect_cli import run_collect
+
+            logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+            secs = next((float(x) for x in rest if x.replace(".", "", 1).isdigit()), 300.0)
+            try:
+                asyncio.run(run_collect(load_settings(), secs, quiet="quiet" in rest))
             except KeyboardInterrupt:
                 pass
             return 0

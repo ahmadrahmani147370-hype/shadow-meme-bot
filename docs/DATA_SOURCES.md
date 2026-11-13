@@ -50,6 +50,19 @@ Other observations:
   $2M-mcap token on meteora-damm-v2) appears "new". Phase 3 must filter by real token age.
 - One wallet (`DMdCJk…`) created many 0-SOL "zero"/spam tokens – a good dev-wallet signal for phase 4.
 
+## Phase 3 findings (13 Nov 2026, 07:30–07:52 PKT)
+
+- DexScreener `tokens/v1` with 29 fresh mints returned pairs for 19 (the other 10, mostly RugCheck
+  mints, had no pair yet). dexIds seen: `pumpfun`, `meteoradbc`, `pumpswap`, `meteora`, `orca`, `bags`.
+- **DexScreener has no `liquidity` for pump.fun / meteora-dbc bonding pairs** (18 of 19 pairs).
+  Jupiter price v3 does return `liquidity` for those tokens, so the collector fills it from Jupiter
+  (`liquidity_source = jupiter`).
+- Many RugCheck-only mints are paired only against other tokens (NVDAx, PUMP, DJT, a fake "SOL"...);
+  they are dropped as `not_meme`.
+- For tokens younger than 24 h, DexScreener's `h24` volume and buy/sell counts include every trade
+  since launch, so snapshot deltas give exact per-minute volume and buys/sells.
+- 5.5-minute live run: 103 DexScreener, 25 GeckoTerminal, 41 RugCheck and 8 Jupiter calls, zero 429s.
+
 ## Source plan for phases 2–4
 
 | Need | Primary | Fallback |
